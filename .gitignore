@@ -1,0 +1,12 @@
+.venv/
+build/
+build_assets/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+QuickTypeData/
+.tmp-ui-data/
