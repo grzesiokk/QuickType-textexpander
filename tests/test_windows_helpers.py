@@ -35,7 +35,10 @@ def test_newline_is_sent_as_return_key() -> None:
 
 
 def test_global_hook_can_start_and_stop() -> None:
-    engine = KeyboardHookEngine([])
+    engine = KeyboardHookEngine([], excluded_processes={"Notepad.EXE"})
+    assert engine._excluded_processes == {"notepad.exe"}
+    engine.set_excluded_processes({"Code.exe"})
+    assert engine._excluded_processes == {"code.exe"}
     engine.start()
     try:
         assert engine._hook_thread_id

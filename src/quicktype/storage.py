@@ -8,7 +8,7 @@ from typing import Iterator
 
 from .models import Snippet, TriggerMode, validate_abbreviation
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class DuplicateAbbreviationError(ValueError):
@@ -41,13 +41,25 @@ class Storage:
                     trigger_mode TEXT NOT NULL CHECK(trigger_mode IN ('immediate', 'delimiter')),
                     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    usage_count INTEGER NOT NULL DEFAULT 0,
+                    last_used_at TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_snippets_enabled
                     ON snippets(enabled);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(snippets)").fetchall()
+            }
+            if "usage_count" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_used_at" not in columns:
+                connection.execute("ALTER TABLE snippets ADD COLUMN last_used_at TEXT")
             connection.execute(
                 """
                 INSERT INTO metadata(key, value) VALUES('schema_version', ?)
@@ -72,7 +84,8 @@ class Storage:
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at
+                SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
+                       usage_count, last_used_at
                 FROM snippets
                 ORDER BY abbreviation COLLATE NOCASE, id
                 """
@@ -83,7 +96,8 @@ class Storage:
         with self._connection() as connection:
             row = connection.execute(
                 """
-                SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at
+                SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
+                       usage_count, last_used_at
                 FROM snippets WHERE id = ?
                 """,
                 (snippet_id,),
@@ -102,8 +116,9 @@ class Storage:
                     cursor = connection.execute(
                         """
                         INSERT INTO snippets(
-                            abbreviation, expansion, trigger_mode, enabled, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
+                            usage_count, last_used_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             snippet.abbreviation,
@@ -112,6 +127,10 @@ class Storage:
                             int(snippet.enabled),
                             timestamp,
                             timestamp,
+                            max(0, snippet.usage_count),
+                            snippet.last_used_at.isoformat(timespec="seconds")
+                            if snippet.last_used_at
+                            else None,
                         ),
                     )
                     snippet_id = int(cursor.lastrowid)
@@ -149,6 +168,80 @@ class Storage:
         with self._connection() as connection:
             connection.execute("DELETE FROM snippets WHERE id = ?", (snippet_id,))
 
+    def record_expansion(self, snippet_id: int) -> Snippet | None:
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE snippets
+                SET usage_count = usage_count + 1, last_used_at = ?
+                WHERE id = ?
+                """,
+                (timestamp, snippet_id),
+            )
+        return self.get_snippet(snippet_id)
+
+    def import_snippets(self, snippets: list[Snippet], *, replace: bool) -> tuple[int, int]:
+        for snippet in snippets:
+            issues = validate_abbreviation(snippet.abbreviation)
+            if issues:
+                raise ValueError(issues[0].message)
+
+        abbreviations = [snippet.abbreviation for snippet in snippets]
+        if len(abbreviations) != len(set(abbreviations)):
+            raise DuplicateAbbreviationError("Duplicate abbreviation in backup")
+
+        now = datetime.now().isoformat(timespec="seconds")
+        added = 0
+        skipped = 0
+        with self._connection() as connection:
+            if replace:
+                connection.execute("DELETE FROM snippets")
+                existing: set[str] = set()
+            else:
+                existing = {
+                    str(row["abbreviation"])
+                    for row in connection.execute("SELECT abbreviation FROM snippets").fetchall()
+                }
+
+            for snippet in snippets:
+                if snippet.abbreviation in existing:
+                    skipped += 1
+                    continue
+                created_at = (
+                    snippet.created_at.isoformat(timespec="seconds")
+                    if snippet.created_at
+                    else now
+                )
+                updated_at = (
+                    snippet.updated_at.isoformat(timespec="seconds")
+                    if snippet.updated_at
+                    else created_at
+                )
+                connection.execute(
+                    """
+                    INSERT INTO snippets(
+                        abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
+                        usage_count, last_used_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snippet.abbreviation,
+                        snippet.expansion,
+                        snippet.trigger_mode.value,
+                        int(snippet.enabled),
+                        created_at,
+                        updated_at,
+                        max(0, snippet.usage_count),
+                        snippet.last_used_at.isoformat(timespec="seconds")
+                        if snippet.last_used_at
+                        else None,
+                    ),
+                )
+                existing.add(snippet.abbreviation)
+                added += 1
+        return added, skipped
+
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         with self._connection() as connection:
             row = connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -174,4 +267,10 @@ class Storage:
             enabled=bool(row["enabled"]),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            usage_count=int(row["usage_count"]),
+            last_used_at=(
+                datetime.fromisoformat(str(row["last_used_at"]))
+                if row["last_used_at"]
+                else None
+            ),
         )

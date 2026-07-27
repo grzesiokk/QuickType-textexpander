@@ -12,7 +12,7 @@ from .constants import INJECTED_EVENT_MARKER
 from .matcher import ExpansionAction, SnippetMatcher
 from .models import Snippet
 from .template_engine import render_template
-from .windows_platform import PasswordFieldDetector, read_clipboard_text
+from .windows_platform import PasswordFieldDetector, process_name_from_window, read_clipboard_text
 
 WH_KEYBOARD_LL = 13
 WH_MOUSE_LL = 14
@@ -209,6 +209,7 @@ class KeyboardHookEngine:
         *,
         on_expansion: Callable[[Snippet], None] | None = None,
         on_error: Callable[[str], None] | None = None,
+        excluded_processes: set[str] | None = None,
     ) -> None:
         self.matcher = SnippetMatcher(snippets or [])
         self.on_expansion = on_expansion
@@ -224,6 +225,10 @@ class KeyboardHookEngine:
         self._keyboard_callback = HOOKPROC(self._keyboard_proc)
         self._mouse_callback = HOOKPROC(self._mouse_proc)
         self._last_window = 0
+        self._last_process_excluded = False
+        self._excluded_processes = {
+            process.casefold() for process in (excluded_processes or set()) if process
+        }
         self._suppressed_keyups: set[int] = set()
         self._password_detector = PasswordFieldDetector()
         self._started = threading.Event()
@@ -241,6 +246,15 @@ class KeyboardHookEngine:
 
     def replace_snippets(self, snippets: list[Snippet]) -> None:
         self.matcher.replace_snippets(snippets)
+
+    def set_excluded_processes(self, processes: set[str]) -> None:
+        with self._active_lock:
+            self._excluded_processes = {
+                process.casefold() for process in processes if process
+            }
+            self._last_window = 0
+            self._last_process_excluded = False
+        self.matcher.clear()
 
     def start(self) -> None:
         if self._hook_thread and self._hook_thread.is_alive():
@@ -338,6 +352,12 @@ class KeyboardHookEngine:
         if foreground != self._last_window:
             self.matcher.clear()
             self._last_window = foreground
+            process_name = process_name_from_window(foreground).casefold()
+            with self._active_lock:
+                self._last_process_excluded = process_name in self._excluded_processes
+        if self._last_process_excluded:
+            self.matcher.clear()
+            return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
         if self._is_own_window(foreground):
             self.matcher.clear()
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))

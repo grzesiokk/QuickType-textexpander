@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QLocale
 from PySide6.QtGui import QIcon
@@ -28,6 +30,9 @@ class QuickTypeController:
         language = self.storage.get_setting("language") or self._system_language()
         self.translator = Translator(language)
         active = self.storage.get_setting("engine_active", "1") != "0"
+        excluded_processes = self._decode_excluded_processes(
+            self.storage.get_setting("excluded_processes", "[]")
+        )
         repair_autostart_if_enabled()
         autostart = is_autostart_enabled()
 
@@ -36,12 +41,14 @@ class QuickTypeController:
             self.storage.list_snippets(),
             on_expansion=self.signals.expanded.emit,
             on_error=self.signals.error.emit,
+            excluded_processes=excluded_processes,
         )
         self.window = MainWindow(
             self.storage,
             self.translator,
             engine_active=active,
             autostart=autostart,
+            excluded_processes=excluded_processes,
         )
         self.tray = TrayController(
             self.translator,
@@ -58,6 +65,9 @@ class QuickTypeController:
         self.window.language_change_requested.connect(self.set_language)
         self.window.active_change_requested.connect(self.set_active)
         self.window.autostart_change_requested.connect(self.set_autostart_enabled)
+        self.window.excluded_processes_change_requested.connect(
+            self.set_excluded_processes
+        )
         self.window.snippets_changed.connect(self.refresh_snippets)
         self.window.quit_requested.connect(self.quit)
         self.signals.expanded.connect(self._on_expanded)
@@ -77,6 +87,20 @@ class QuickTypeController:
     @staticmethod
     def _system_language() -> str:
         return "pl" if QLocale.system().language() == QLocale.Language.Polish else "en"
+
+    @staticmethod
+    def _decode_excluded_processes(value: str | None) -> set[str]:
+        try:
+            items = json.loads(value or "[]")
+        except json.JSONDecodeError:
+            return set()
+        if not isinstance(items, list):
+            return set()
+        return {
+            Path(item).name
+            for item in items
+            if isinstance(item, str) and item.strip()
+        }
 
     def set_language(self, language: str) -> None:
         self.translator.set_language(language)
@@ -107,8 +131,26 @@ class QuickTypeController:
     def refresh_snippets(self) -> None:
         self.engine.replace_snippets(self.storage.list_snippets())
 
+    def set_excluded_processes(self, processes: object) -> None:
+        if not isinstance(processes, set):
+            return
+        normalized = {
+            Path(process).name for process in processes if isinstance(process, str) and process
+        }
+        self.storage.set_setting(
+            "excluded_processes",
+            json.dumps(sorted(normalized, key=str.casefold), ensure_ascii=False),
+        )
+        self.engine.set_excluded_processes(normalized)
+        self.window.set_excluded_processes(normalized)
+
     def _on_expanded(self, snippet: object) -> None:
         abbreviation = getattr(snippet, "abbreviation", "")
+        snippet_id = getattr(snippet, "id", None)
+        if isinstance(snippet_id, int):
+            updated = self.storage.record_expansion(snippet_id)
+            if updated is not None:
+                self.window.refresh_usage(updated)
         self.window.status_message.setText(self.translator("expanded", abbr=abbreviation))
 
     def _on_engine_error(self, error: str) -> None:

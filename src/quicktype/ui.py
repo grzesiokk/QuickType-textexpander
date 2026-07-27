@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSignalBlocker, Qt, Signal
@@ -13,9 +14,11 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -35,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .backup import BackupFormatError, export_backup, import_backup
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .i18n import Translator
 from .models import Snippet, TriggerMode, validate_abbreviation
@@ -57,13 +61,14 @@ class SettingsDialog(QDialog):
         language: str,
         engine_active: bool,
         autostart: bool,
+        excluded_processes: set[str],
         database_path: Path,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.t = translator
         self.setModal(True)
-        self.resize(520, 280)
+        self.resize(560, 430)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -80,6 +85,13 @@ class SettingsDialog(QDialog):
         self.autostart_checkbox = QCheckBox(self.t("autostart"))
         self.autostart_checkbox.setChecked(autostart)
         form.addRow("", self.autostart_checkbox)
+
+        self.excluded_label = QLabel(self.t("excluded_apps"))
+        self.excluded_edit = QPlainTextEdit()
+        self.excluded_edit.setMaximumHeight(105)
+        self.excluded_edit.setPlaceholderText(self.t("excluded_apps_help"))
+        self.excluded_edit.setPlainText("\n".join(sorted(excluded_processes, key=str.casefold)))
+        form.addRow(self.excluded_label, self.excluded_edit)
         layout.addLayout(form)
 
         warning = QLabel(self.t("warning_terminal"))
@@ -106,11 +118,20 @@ class SettingsDialog(QDialog):
     def selected_language(self) -> str:
         return str(self.language_combo.currentData())
 
+    @property
+    def selected_excluded_processes(self) -> set[str]:
+        return {
+            Path(line.strip()).name
+            for line in self.excluded_edit.toPlainText().splitlines()
+            if line.strip()
+        }
+
 
 class MainWindow(QMainWindow):
     language_change_requested = Signal(str)
     active_change_requested = Signal(bool)
     autostart_change_requested = Signal(bool)
+    excluded_processes_change_requested = Signal(object)
     snippets_changed = Signal()
     quit_requested = Signal()
 
@@ -121,12 +142,14 @@ class MainWindow(QMainWindow):
         *,
         engine_active: bool,
         autostart: bool,
+        excluded_processes: set[str] | None = None,
     ) -> None:
         super().__init__()
         self.storage = storage
         self.t = translator
         self.engine_active = engine_active
         self.autostart = autostart
+        self.excluded_processes = set(excluded_processes or set())
         self.snippets: list[Snippet] = []
         self._current_id: int | None = None
         self._is_new = False
@@ -156,6 +179,14 @@ class MainWindow(QMainWindow):
         self.delete_action.setShortcut(QKeySequence.StandardKey.Delete)
         self.delete_action.triggered.connect(self.delete_current)
         toolbar.addAction(self.delete_action)
+
+        self.import_action = QAction(self)
+        self.import_action.triggered.connect(self.import_snippets)
+        toolbar.addAction(self.import_action)
+
+        self.export_action = QAction(self)
+        self.export_action.triggered.connect(self.export_snippets)
+        toolbar.addAction(self.export_action)
         toolbar.addSeparator()
 
         self.active_action = QAction(self)
@@ -198,14 +229,15 @@ class MainWindow(QMainWindow):
         self.search_edit.textChanged.connect(self.apply_filter)
         layout.addWidget(self.search_edit)
 
-        self.table = QTableWidget(0, 3)
+        self.table = QTableWidget(0, 4)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(0, 44)
-        self.table.setColumnWidth(1, 170)
+        self.table.setColumnWidth(2, 120)
+        self.table.setColumnWidth(3, 70)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
 
@@ -247,6 +279,9 @@ class MainWindow(QMainWindow):
         self.enabled_checkbox = QCheckBox()
         self.enabled_checkbox.toggled.connect(self._editor_changed)
         form.addWidget(self.enabled_checkbox, 2, 1)
+        self.stats_label = QLabel()
+        self.stats_label.setProperty("kind", "muted")
+        form.addWidget(self.stats_label, 3, 1)
         form.setColumnStretch(1, 1)
         layout.addLayout(form)
 
@@ -298,11 +333,18 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self.t("app_title"))
         self.new_action.setText(self.t("new"))
         self.delete_action.setText(self.t("delete"))
+        self.import_action.setText(self.t("import"))
+        self.export_action.setText(self.t("export"))
         self.active_action.setText(self.t("engine_active"))
         self.settings_action.setText(self.t("settings"))
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
         self.table.setHorizontalHeaderLabels(
-            [self.t("active_column"), self.t("shortcut_column"), self.t("mode_column")]
+            [
+                self.t("active_column"),
+                self.t("shortcut_column"),
+                self.t("mode_column"),
+                self.t("usage_column"),
+            ]
         )
         self.empty_title.setText(self.t("empty_title"))
         self.empty_text.setText(self.t("empty_text"))
@@ -327,6 +369,9 @@ class MainWindow(QMainWindow):
             self.t("status_active") if self.engine_active else self.t("status_paused")
         )
         self._populate_table(preserve_selection=True)
+        self._update_stats_label(
+            next((entry for entry in self.snippets if entry.id == self._current_id), None)
+        )
         self.update_preview()
 
     def reload_snippets(self, *, select_id: int | None = None) -> None:
@@ -357,9 +402,13 @@ class MainWindow(QMainWindow):
                     else self.t("delimiter")
                 )
                 mode.setData(ID_ROLE, snippet.id)
+                usage = QTableWidgetItem(str(snippet.usage_count))
+                usage.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                usage.setData(ID_ROLE, snippet.id)
                 self.table.setItem(row, 0, enabled)
                 self.table.setItem(row, 1, abbreviation)
                 self.table.setItem(row, 2, mode)
+                self.table.setItem(row, 3, usage)
         self.apply_filter(self.search_edit.text())
         if selected_id is not None:
             self._select_id(selected_id)
@@ -431,6 +480,7 @@ class MainWindow(QMainWindow):
                 self.expansion_edit.setPlainText(snippet.expansion)
             self.editor_panel.setEnabled(True)
             self._dirty = False
+            self._update_stats_label(snippet)
             self.update_preview()
         finally:
             self._selection_guard = False
@@ -522,6 +572,70 @@ class MainWindow(QMainWindow):
         self.snippets_changed.emit()
         self.status_message.setText(self.t("deleted"))
 
+    def export_snippets(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        default_name = self.storage.path.parent / (
+            f"QuickType-backup-{datetime.now():%Y%m%d}.json"
+        )
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            self.t("export_title"),
+            str(default_name),
+            self.t("backup_filter"),
+        )
+        if not path:
+            return
+        try:
+            snippets = self.storage.list_snippets()
+            export_backup(Path(path), snippets)
+        except OSError as error:
+            QMessageBox.warning(self, self.t("export_error_title"), str(error))
+            return
+        self.status_message.setText(
+            self.t("export_success", count=len(snippets), path=path)
+        )
+
+    def import_snippets(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            self.t("import_title"),
+            str(self.storage.path.parent),
+            self.t("backup_filter"),
+        )
+        if not path:
+            return
+        choice = QMessageBox.question(
+            self,
+            self.t("import_choice_title"),
+            self.t("import_choice_text"),
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.No,
+        )
+        if choice == QMessageBox.StandardButton.Cancel:
+            return
+        try:
+            snippets = import_backup(Path(path))
+            added, skipped = self.storage.import_snippets(
+                snippets,
+                replace=choice == QMessageBox.StandardButton.Yes,
+            )
+        except (OSError, ValueError, BackupFormatError) as error:
+            QMessageBox.warning(self, self.t("import_error_title"), str(error))
+            return
+        self._current_id = None
+        self._is_new = False
+        self._dirty = False
+        self.reload_snippets()
+        self.snippets_changed.emit()
+        self.status_message.setText(
+            self.t("import_success", added=added, skipped=skipped)
+        )
+
     def cancel_edit(self) -> None:
         if self._current_id is not None:
             snippet = next((entry for entry in self.snippets if entry.id == self._current_id), None)
@@ -606,6 +720,7 @@ class MainWindow(QMainWindow):
             language=self.t.language,
             engine_active=self.engine_active,
             autostart=self.autostart,
+            excluded_processes=self.excluded_processes,
             database_path=self.storage.path,
             parent=self,
         )
@@ -617,6 +732,10 @@ class MainWindow(QMainWindow):
             self.active_change_requested.emit(dialog.active_checkbox.isChecked())
         if dialog.autostart_checkbox.isChecked() != self.autostart:
             self.autostart_change_requested.emit(dialog.autostart_checkbox.isChecked())
+        if dialog.selected_excluded_processes != self.excluded_processes:
+            self.excluded_processes_change_requested.emit(
+                dialog.selected_excluded_processes
+            )
 
     def set_engine_active(self, active: bool) -> None:
         self.engine_active = active
@@ -626,6 +745,35 @@ class MainWindow(QMainWindow):
 
     def set_autostart(self, enabled: bool) -> None:
         self.autostart = enabled
+
+    def set_excluded_processes(self, processes: set[str]) -> None:
+        self.excluded_processes = set(processes)
+
+    def refresh_usage(self, snippet: Snippet) -> None:
+        self.snippets = [
+            snippet if entry.id == snippet.id else entry for entry in self.snippets
+        ]
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item and item.data(ID_ROLE) == snippet.id:
+                self.table.item(row, 3).setText(str(snippet.usage_count))
+                break
+        if self._current_id == snippet.id:
+            self._update_stats_label(snippet)
+
+    def _update_stats_label(self, snippet: Snippet | None) -> None:
+        if snippet is None or snippet.usage_count == 0:
+            self.stats_label.setText(self.t("never_used"))
+            return
+        if snippet.last_used_at is None:
+            last = "—"
+        elif self.t.language == "pl":
+            last = snippet.last_used_at.strftime("%d.%m.%Y %H:%M")
+        else:
+            last = snippet.last_used_at.strftime("%Y-%m-%d %H:%M")
+        self.stats_label.setText(
+            self.t("usage_summary", count=snippet.usage_count, last=last)
+        )
 
     def show_and_activate(self) -> None:
         self.showNormal()

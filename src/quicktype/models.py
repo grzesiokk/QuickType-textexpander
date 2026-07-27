@@ -19,6 +19,8 @@ class Snippet:
     enabled: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    usage_count: int = 0
+    last_used_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

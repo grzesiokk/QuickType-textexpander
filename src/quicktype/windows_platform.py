@@ -12,6 +12,7 @@ from .constants import AUTOSTART_VALUE_NAME
 CF_UNICODETEXT = 13
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 UIA_IS_PASSWORD_PROPERTY_ID = 30019
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -28,6 +29,19 @@ kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
 kernel32.GlobalLock.restype = wintypes.LPVOID
 kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
 kernel32.GlobalUnlock.restype = wintypes.BOOL
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wintypes.HANDLE,
+    wintypes.DWORD,
+    wintypes.LPWSTR,
+    ctypes.POINTER(wintypes.DWORD),
+]
+kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
 
 
 def autostart_command(executable: Path | None = None) -> str:
@@ -99,6 +113,30 @@ def read_clipboard_text() -> str:
             kernel32.GlobalUnlock(handle)
     finally:
         user32.CloseClipboard()
+
+
+def process_name_from_window(window: int) -> str:
+    if not window:
+        return ""
+    process_id = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(window, ctypes.byref(process_id))
+    if not process_id.value:
+        return ""
+    handle = kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION,
+        False,
+        process_id.value,
+    )
+    if not handle:
+        return ""
+    try:
+        size = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return ""
+        return Path(buffer.value).name
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 class PasswordFieldDetector:

@@ -51,6 +51,17 @@ The interface can be switched between Polish and English in Settings.
 Closing the main window keeps QuickType in the system tray. The tray menu can
 pause expansion, enable autostart, reopen the window, or quit completely.
 
+## Backups, statistics, and exclusions
+
+- **Export** creates a human-readable UTF-8 JSON backup containing all snippets
+  and their usage statistics.
+- **Import** can replace the current library or merge a backup while skipping
+  abbreviations that already exist.
+- The snippet list shows how many times each abbreviation has expanded. The
+  editor also shows the most recent use.
+- Settings contains an excluded-applications list. Enter one executable name
+  per line, such as `KeePass.exe`, to prevent expansion in that process.
+
 ## Safety and Windows limitations
 
 - Typed text is held only in a short in-memory matching buffer and is never
@@ -108,4 +119,3 @@ storage. Snippets and settings remain in the local SQLite database.
 
 The project is licensed under the MIT License. PySide6/Qt and other packaged
 dependencies retain their respective upstream licenses.
-
