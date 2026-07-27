@@ -6,9 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from .models import Snippet, TriggerMode, validate_abbreviation
+from .models import Snippet, TriggerMode, validate_abbreviation, validate_category
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class DuplicateAbbreviationError(ValueError):
@@ -43,7 +43,8 @@ class Storage:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     usage_count INTEGER NOT NULL DEFAULT 0,
-                    last_used_at TEXT
+                    last_used_at TEXT,
+                    category TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_snippets_enabled
@@ -60,6 +61,14 @@ class Storage:
                 )
             if "last_used_at" not in columns:
                 connection.execute("ALTER TABLE snippets ADD COLUMN last_used_at TEXT")
+            if "category" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN category TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snippets_category "
+                "ON snippets(category COLLATE NOCASE)"
+            )
             connection.execute(
                 """
                 INSERT INTO metadata(key, value) VALUES('schema_version', ?)
@@ -85,7 +94,7 @@ class Storage:
             rows = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at
+                       usage_count, last_used_at, category
                 FROM snippets
                 ORDER BY abbreviation COLLATE NOCASE, id
                 """
@@ -97,7 +106,7 @@ class Storage:
             row = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at
+                       usage_count, last_used_at, category
                 FROM snippets WHERE id = ?
                 """,
                 (snippet_id,),
@@ -108,6 +117,10 @@ class Storage:
         issues = validate_abbreviation(snippet.abbreviation)
         if issues:
             raise ValueError(issues[0].message)
+        category = snippet.category.strip()
+        category_issues = validate_category(category)
+        if category_issues:
+            raise ValueError(category_issues[0].message)
         timestamp = datetime.now().isoformat(timespec="seconds")
 
         try:
@@ -117,8 +130,8 @@ class Storage:
                         """
                         INSERT INTO snippets(
                             abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                            usage_count, last_used_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            usage_count, last_used_at, category
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             snippet.abbreviation,
@@ -131,6 +144,7 @@ class Storage:
                             snippet.last_used_at.isoformat(timespec="seconds")
                             if snippet.last_used_at
                             else None,
+                            category,
                         ),
                     )
                     snippet_id = int(cursor.lastrowid)
@@ -139,7 +153,7 @@ class Storage:
                         """
                         UPDATE snippets
                         SET abbreviation = ?, expansion = ?, trigger_mode = ?,
-                            enabled = ?, updated_at = ?
+                            enabled = ?, updated_at = ?, category = ?
                         WHERE id = ?
                         """,
                         (
@@ -148,6 +162,7 @@ class Storage:
                             snippet.trigger_mode.value,
                             int(snippet.enabled),
                             timestamp,
+                            category,
                             snippet.id,
                         ),
                     )
@@ -186,6 +201,9 @@ class Storage:
             issues = validate_abbreviation(snippet.abbreviation)
             if issues:
                 raise ValueError(issues[0].message)
+            category_issues = validate_category(snippet.category.strip())
+            if category_issues:
+                raise ValueError(category_issues[0].message)
 
         abbreviations = [snippet.abbreviation for snippet in snippets]
         if len(abbreviations) != len(set(abbreviations)):
@@ -222,8 +240,8 @@ class Storage:
                     """
                     INSERT INTO snippets(
                         abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                        usage_count, last_used_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        usage_count, last_used_at, category
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snippet.abbreviation,
@@ -236,6 +254,7 @@ class Storage:
                         snippet.last_used_at.isoformat(timespec="seconds")
                         if snippet.last_used_at
                         else None,
+                        snippet.category.strip(),
                     ),
                 )
                 existing.add(snippet.abbreviation)
@@ -273,4 +292,5 @@ class Storage:
                 if row["last_used_at"]
                 else None
             ),
+            category=str(row["category"]),
         )

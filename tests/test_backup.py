@@ -21,6 +21,7 @@ def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
         updated_at=datetime(2026, 7, 28, 11, 0),
         usage_count=4,
         last_used_at=datetime(2026, 7, 28, 12, 0),
+        category="Praca",
     )
     path = tmp_path / "backup.json"
     export_backup(path, [source])
@@ -32,6 +33,29 @@ def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
     assert imported[0].trigger_mode == TriggerMode.DELIMITER
     assert imported[0].usage_count == 4
     assert imported[0].last_used_at == datetime(2026, 7, 28, 12, 0)
+    assert imported[0].category == "Praca"
+
+
+def test_old_backup_without_category_remains_compatible(tmp_path: Path) -> None:
+    path = tmp_path / "old.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format": "quicktype-backup",
+                "version": 1,
+                "snippets": [
+                    {
+                        "abbreviation": "sig",
+                        "expansion": "Regards",
+                        "trigger_mode": "delimiter",
+                        "enabled": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert import_backup(path)[0].category == ""
 
 
 def test_backup_is_utf8_and_human_readable(tmp_path: Path) -> None:

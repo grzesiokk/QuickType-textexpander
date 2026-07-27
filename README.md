@@ -26,7 +26,8 @@ Close QuickType from its tray menu before copying its database.
 
 1. Click **New** / **Nowy**.
 2. Enter an abbreviation without whitespace, for example `;sig`.
-3. Enter the expansion text and choose a trigger mode.
+3. Optionally assign a category, then enter the expansion text and choose a
+   trigger mode.
 4. Save the snippet and try it in Notepad, Word, a browser, VS Code, or Windows
    Terminal.
 
@@ -53,6 +54,8 @@ pause expansion, enable autostart, reopen the window, or quit completely.
 
 ## Backups, statistics, and exclusions
 
+- Snippets can be organized into categories. Use the category selector above
+  the list to filter the library; category names are preserved in backups.
 - **Export** creates a human-readable UTF-8 JSON backup containing all snippets
   and their usage statistics.
 - **Import** can replace the current library or merge a backup while skipping

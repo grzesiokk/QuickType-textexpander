@@ -21,6 +21,7 @@ class Snippet:
     updated_at: datetime | None = None
     usage_count: int = 0
     last_used_at: datetime | None = None
+    category: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,4 +40,16 @@ def validate_abbreviation(value: str) -> list[ValidationIssue]:
         issues.append(ValidationIssue("whitespace", "Abbreviation cannot contain whitespace."))
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         issues.append(ValidationIssue("control", "Abbreviation cannot contain control characters."))
+    return issues
+
+
+def validate_category(value: str) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    if len(value) > 64:
+        issues.append(ValidationIssue("too_long", "Category must have at most 64 characters."))
+    if any(
+        character in "\r\n" or ord(character) < 32 or ord(character) == 127
+        for character in value
+    ):
+        issues.append(ValidationIssue("control", "Category cannot contain control characters."))
     return issues

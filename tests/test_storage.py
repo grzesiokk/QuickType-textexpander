@@ -64,6 +64,20 @@ def test_usage_is_recorded(storage: Storage) -> None:
     assert updated.last_used_at is not None
 
 
+def test_category_is_normalized_and_persisted(storage: Storage) -> None:
+    saved = storage.save_snippet(
+        Snippet(
+            None,
+            "mail",
+            "hello@example.com",
+            TriggerMode.IMMEDIATE,
+            category="  Kontakt  ",
+        )
+    )
+    assert saved.category == "Kontakt"
+    assert storage.list_snippets()[0].category == "Kontakt"
+
+
 def test_import_can_merge_or_replace(storage: Storage) -> None:
     storage.save_snippet(Snippet(None, "keep", "Old", TriggerMode.DELIMITER))
     incoming = [
@@ -75,6 +89,7 @@ def test_import_can_merge_or_replace(storage: Storage) -> None:
             TriggerMode.IMMEDIATE,
             usage_count=3,
             last_used_at=datetime(2026, 7, 28, 12, 0),
+            category="Praca",
         ),
     ]
     assert storage.import_snippets(incoming, replace=False) == (1, 1)
@@ -84,6 +99,7 @@ def test_import_can_merge_or_replace(storage: Storage) -> None:
     replaced = {item.abbreviation: item for item in storage.list_snippets()}
     assert replaced["keep"].expansion == "Backup"
     assert replaced["new"].usage_count == 3
+    assert replaced["new"].category == "Praca"
 
 
 def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None:
@@ -117,4 +133,12 @@ def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None
     assert snippet.abbreviation == "sig"
     assert snippet.usage_count == 0
     assert snippet.last_used_at is None
+    assert snippet.category == ""
     assert migrated.get_setting("missing") is None
+
+    connection = sqlite3.connect(path)
+    schema_version = connection.execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()[0]
+    connection.close()
+    assert schema_version == "3"

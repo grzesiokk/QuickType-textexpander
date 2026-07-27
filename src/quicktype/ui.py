@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 from .backup import BackupFormatError, export_backup, import_backup
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .i18n import Translator
-from .models import Snippet, TriggerMode, validate_abbreviation
+from .models import Snippet, TriggerMode, validate_abbreviation, validate_category
 from .storage import DuplicateAbbreviationError, Storage
 from .template_engine import TemplateIssue, inspect_template, render_template
 
@@ -227,17 +227,26 @@ class MainWindow(QMainWindow):
         self.search_edit = QLineEdit()
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.apply_filter)
-        layout.addWidget(self.search_edit)
+        filters = QHBoxLayout()
+        filters.addWidget(self.search_edit, 1)
+        self.category_filter = QComboBox()
+        self.category_filter.setMinimumWidth(135)
+        self.category_filter.currentIndexChanged.connect(
+            lambda _index: self.apply_filter(self.search_edit.text())
+        )
+        filters.addWidget(self.category_filter)
+        layout.addLayout(filters)
 
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, 5)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(0, 44)
-        self.table.setColumnWidth(2, 120)
-        self.table.setColumnWidth(3, 70)
+        self.table.setColumnWidth(2, 125)
+        self.table.setColumnWidth(3, 115)
+        self.table.setColumnWidth(4, 65)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
 
@@ -270,18 +279,28 @@ class MainWindow(QMainWindow):
         form.addWidget(self.abbreviation_label, 0, 0)
         form.addWidget(self.abbreviation_edit, 0, 1)
 
+        self.category_label = QLabel()
+        self.category_combo = QComboBox()
+        self.category_combo.setEditable(True)
+        self.category_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        if self.category_combo.lineEdit() is not None:
+            self.category_combo.lineEdit().setMaxLength(64)
+        self.category_combo.currentTextChanged.connect(self._editor_changed)
+        form.addWidget(self.category_label, 1, 0)
+        form.addWidget(self.category_combo, 1, 1)
+
         self.mode_label = QLabel()
         self.mode_combo = QComboBox()
         self.mode_combo.currentIndexChanged.connect(self._editor_changed)
-        form.addWidget(self.mode_label, 1, 0)
-        form.addWidget(self.mode_combo, 1, 1)
+        form.addWidget(self.mode_label, 2, 0)
+        form.addWidget(self.mode_combo, 2, 1)
 
         self.enabled_checkbox = QCheckBox()
         self.enabled_checkbox.toggled.connect(self._editor_changed)
-        form.addWidget(self.enabled_checkbox, 2, 1)
+        form.addWidget(self.enabled_checkbox, 3, 1)
         self.stats_label = QLabel()
         self.stats_label.setProperty("kind", "muted")
-        form.addWidget(self.stats_label, 3, 1)
+        form.addWidget(self.stats_label, 4, 1)
         form.setColumnStretch(1, 1)
         layout.addLayout(form)
 
@@ -342,6 +361,7 @@ class MainWindow(QMainWindow):
             [
                 self.t("active_column"),
                 self.t("shortcut_column"),
+                self.t("category_column"),
                 self.t("mode_column"),
                 self.t("usage_column"),
             ]
@@ -349,6 +369,7 @@ class MainWindow(QMainWindow):
         self.empty_title.setText(self.t("empty_title"))
         self.empty_text.setText(self.t("empty_text"))
         self.abbreviation_label.setText(self.t("abbreviation"))
+        self.category_label.setText(self.t("category"))
         self.mode_label.setText(self.t("trigger_mode"))
         current_mode = self.mode_combo.currentData()
         with QSignalBlocker(self.mode_combo):
@@ -357,6 +378,7 @@ class MainWindow(QMainWindow):
             self.mode_combo.addItem(self.t("delimiter"), TriggerMode.DELIMITER.value)
             mode_index = self.mode_combo.findData(current_mode)
             self.mode_combo.setCurrentIndex(max(0, mode_index))
+        self._refresh_category_controls()
         self.enabled_checkbox.setText(self.t("enabled"))
         self.expansion_label.setText(self.t("expansion"))
         self.variables_label.setText(self.t("variables") + ":")
@@ -376,6 +398,7 @@ class MainWindow(QMainWindow):
 
     def reload_snippets(self, *, select_id: int | None = None) -> None:
         self.snippets = self.storage.list_snippets()
+        self._refresh_category_controls()
         self._populate_table(preserve_selection=False)
         if select_id is not None:
             self._select_id(select_id)
@@ -396,6 +419,10 @@ class MainWindow(QMainWindow):
                 enabled.setData(ID_ROLE, snippet.id)
                 abbreviation = QTableWidgetItem(snippet.abbreviation)
                 abbreviation.setData(ID_ROLE, snippet.id)
+                category = QTableWidgetItem(
+                    snippet.category if snippet.category else self.t("uncategorized")
+                )
+                category.setData(ID_ROLE, snippet.id)
                 mode = QTableWidgetItem(
                     self.t("immediate")
                     if snippet.trigger_mode == TriggerMode.IMMEDIATE
@@ -407,8 +434,9 @@ class MainWindow(QMainWindow):
                 usage.setData(ID_ROLE, snippet.id)
                 self.table.setItem(row, 0, enabled)
                 self.table.setItem(row, 1, abbreviation)
-                self.table.setItem(row, 2, mode)
-                self.table.setItem(row, 3, usage)
+                self.table.setItem(row, 2, category)
+                self.table.setItem(row, 3, mode)
+                self.table.setItem(row, 4, usage)
         self.apply_filter(self.search_edit.text())
         if selected_id is not None:
             self._select_id(selected_id)
@@ -416,18 +444,51 @@ class MainWindow(QMainWindow):
 
     def apply_filter(self, text: str) -> None:
         needle = text.strip().casefold()
+        selected_category = self.category_filter.currentData()
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 1)
             snippet_id = item.data(ID_ROLE)
             snippet = next((entry for entry in self.snippets if entry.id == snippet_id), None)
-            visible = not needle or (
+            matches_text = not needle or (
                 snippet is not None
                 and (
                     needle in snippet.abbreviation.casefold()
                     or needle in snippet.expansion.casefold()
+                    or needle in snippet.category.casefold()
                 )
             )
+            matches_category = (
+                selected_category is None
+                or (snippet is not None and snippet.category == selected_category)
+            )
+            visible = matches_text and matches_category
             self.table.setRowHidden(row, not visible)
+
+    def _refresh_category_controls(self) -> None:
+        categories = sorted(
+            {snippet.category for snippet in self.snippets if snippet.category},
+            key=str.casefold,
+        )
+        selected_filter = (
+            self.category_filter.currentData()
+            if hasattr(self, "category_filter") and self.category_filter.count()
+            else None
+        )
+        with QSignalBlocker(self.category_filter):
+            self.category_filter.clear()
+            self.category_filter.addItem(self.t("all_categories"), None)
+            self.category_filter.addItem(self.t("uncategorized"), "")
+            for category in categories:
+                self.category_filter.addItem(category, category)
+            filter_index = self.category_filter.findData(selected_filter)
+            self.category_filter.setCurrentIndex(max(0, filter_index))
+
+        current_category = self.category_combo.currentText()
+        with QSignalBlocker(self.category_combo):
+            self.category_combo.clear()
+            self.category_combo.addItem("")
+            self.category_combo.addItems(categories)
+            self.category_combo.setEditText(current_category)
 
     def _selection_changed(self) -> None:
         if self._selection_guard:
@@ -468,11 +529,13 @@ class MainWindow(QMainWindow):
             self._is_new = False
             with (
                 QSignalBlocker(self.abbreviation_edit),
+                QSignalBlocker(self.category_combo),
                 QSignalBlocker(self.mode_combo),
                 QSignalBlocker(self.enabled_checkbox),
                 QSignalBlocker(self.expansion_edit),
             ):
                 self.abbreviation_edit.setText(snippet.abbreviation)
+                self.category_combo.setEditText(snippet.category)
                 self.mode_combo.setCurrentIndex(
                     self.mode_combo.findData(snippet.trigger_mode.value)
                 )
@@ -495,6 +558,7 @@ class MainWindow(QMainWindow):
             self._is_new = True
             self.editor_panel.setEnabled(True)
             self.abbreviation_edit.clear()
+            self.category_combo.setEditText("")
             self.mode_combo.setCurrentIndex(self.mode_combo.findData(TriggerMode.DELIMITER.value))
             self.enabled_checkbox.setChecked(True)
             self.expansion_edit.clear()
@@ -522,12 +586,26 @@ class MainWindow(QMainWindow):
                 self.t(key_by_code.get(issues[0].code, "required_abbreviation")),
             )
             return False
+        category = self.category_combo.currentText().strip()
+        category_issues = validate_category(category)
+        if category_issues:
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t(
+                    "long_category"
+                    if category_issues[0].code == "too_long"
+                    else "control_category"
+                ),
+            )
+            return False
         snippet = Snippet(
             id=self._current_id,
             abbreviation=abbreviation,
             expansion=self.expansion_edit.toPlainText(),
             trigger_mode=TriggerMode(str(self.mode_combo.currentData())),
             enabled=self.enabled_checkbox.isChecked(),
+            category=category,
         )
         try:
             saved = self.storage.save_snippet(snippet)
@@ -756,7 +834,7 @@ class MainWindow(QMainWindow):
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
             if item and item.data(ID_ROLE) == snippet.id:
-                self.table.item(row, 3).setText(str(snippet.usage_count))
+                self.table.item(row, 4).setText(str(snippet.usage_count))
                 break
         if self._current_id == snippet.id:
             self._update_stats_label(snippet)

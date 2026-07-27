@@ -75,6 +75,7 @@ def _snippet_to_dict(snippet: Snippet) -> dict[str, Any]:
         "last_used_at": snippet.last_used_at.isoformat(timespec="seconds")
         if snippet.last_used_at
         else None,
+        "category": snippet.category,
     }
 
 
@@ -86,6 +87,7 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
     trigger_mode = value.get("trigger_mode")
     enabled = value.get("enabled")
     usage_count = value.get("usage_count", 0)
+    category = value.get("category", "")
 
     if not isinstance(abbreviation, str) or validate_abbreviation(abbreviation):
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid abbreviation.")
@@ -99,6 +101,15 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid enabled value.")
     if not isinstance(usage_count, int) or isinstance(usage_count, bool) or usage_count < 0:
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid usage count.")
+    if (
+        not isinstance(category, str)
+        or len(category.strip()) > 64
+        or any(
+            character in "\r\n" or ord(character) < 32 or ord(character) == 127
+            for character in category
+        )
+    ):
+        raise BackupFormatError(f"Snippet #{index + 1} has an invalid category.")
 
     return Snippet(
         id=None,
@@ -110,6 +121,7 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         updated_at=_optional_datetime(value.get("updated_at"), index, "updated_at"),
         usage_count=usage_count,
         last_used_at=_optional_datetime(value.get("last_used_at"), index, "last_used_at"),
+        category=category.strip(),
     )
 
 
