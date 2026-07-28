@@ -51,6 +51,7 @@ ID_ROLE = Qt.ItemDataRole.UserRole
 class EngineSignals(QObject):
     expanded = Signal(object)
     error = Signal(str)
+    quick_access = Signal(int)
 
 
 class SettingsDialog(QDialog):
@@ -99,6 +100,11 @@ class SettingsDialog(QDialog):
         warning.setProperty("kind", "warning")
         layout.addWidget(warning)
 
+        quick_access = QLabel(self.t("quick_access_setting"))
+        quick_access.setWordWrap(True)
+        quick_access.setProperty("kind", "muted")
+        layout.addWidget(quick_access)
+
         path_label = QLabel(self.t("db_location", path=str(database_path)))
         path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         path_label.setWordWrap(True)
@@ -125,6 +131,129 @@ class SettingsDialog(QDialog):
             for line in self.excluded_edit.toPlainText().splitlines()
             if line.strip()
         }
+
+
+class QuickAccessDialog(QDialog):
+    snippet_chosen = Signal(object, int)
+
+    def __init__(
+        self,
+        storage: Storage,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.storage = storage
+        self.t = translator
+        self.snippets: list[Snippet] = []
+        self._target_window = 0
+
+        self.setWindowFlag(Qt.WindowType.Tool, True)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setModal(False)
+        self.resize(720, 430)
+
+        layout = QVBoxLayout(self)
+        self.search_edit = QLineEdit()
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self.apply_filter)
+        self.search_edit.returnPressed.connect(self.choose_current)
+        layout.addWidget(self.search_edit)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 150)
+        self.table.setColumnWidth(1, 140)
+        self.table.itemDoubleClicked.connect(lambda _item: self.choose_current())
+        layout.addWidget(self.table, 1)
+
+        self.hint_label = QLabel()
+        self.hint_label.setProperty("kind", "muted")
+        layout.addWidget(self.hint_label)
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        self.setWindowTitle(self.t("quick_access"))
+        self.search_edit.setPlaceholderText(self.t("quick_access_search"))
+        self.table.setHorizontalHeaderLabels(
+            [
+                self.t("shortcut_column"),
+                self.t("category_column"),
+                self.t("expansion"),
+            ]
+        )
+        self.hint_label.setText(self.t("quick_access_hint"))
+        if self.snippets:
+            self._populate_table()
+
+    def show_for_window(self, target_window: int) -> None:
+        self._target_window = target_window
+        self.snippets = [snippet for snippet in self.storage.list_snippets() if snippet.enabled]
+        self._populate_table()
+        self.search_edit.clear()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.search_edit.setFocus()
+
+    def _populate_table(self) -> None:
+        self.table.setRowCount(0)
+        for snippet in self.snippets:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            abbreviation = QTableWidgetItem(snippet.abbreviation)
+            abbreviation.setData(ID_ROLE, snippet.id)
+            category = QTableWidgetItem(
+                snippet.category if snippet.category else self.t("uncategorized")
+            )
+            category.setData(ID_ROLE, snippet.id)
+            preview = render_template(snippet.expansion, clipboard_text="").text
+            preview_item = QTableWidgetItem(preview.replace("\r", "").replace("\n", " ↵ "))
+            preview_item.setData(ID_ROLE, snippet.id)
+            self.table.setItem(row, 0, abbreviation)
+            self.table.setItem(row, 1, category)
+            self.table.setItem(row, 2, preview_item)
+        self._select_first_visible()
+
+    def apply_filter(self, text: str) -> None:
+        needle = text.strip().casefold()
+        for row in range(self.table.rowCount()):
+            snippet_id = self.table.item(row, 0).data(ID_ROLE)
+            snippet = next((item for item in self.snippets if item.id == snippet_id), None)
+            visible = (
+                snippet is not None
+                and (
+                    not needle
+                    or needle in snippet.abbreviation.casefold()
+                    or needle in snippet.category.casefold()
+                    or needle in snippet.expansion.casefold()
+                )
+            )
+            self.table.setRowHidden(row, not visible)
+        self._select_first_visible()
+
+    def _select_first_visible(self) -> None:
+        for row in range(self.table.rowCount()):
+            if not self.table.isRowHidden(row):
+                self.table.selectRow(row)
+                return
+        self.table.clearSelection()
+
+    def choose_current(self) -> None:
+        selected = self.table.selectedItems()
+        if not selected:
+            return
+        snippet_id = selected[0].data(ID_ROLE)
+        snippet = next((item for item in self.snippets if item.id == snippet_id), None)
+        if snippet is None:
+            return
+        target_window = self._target_window
+        self.hide()
+        self.snippet_chosen.emit(snippet, target_window)
 
 
 class MainWindow(QMainWindow):

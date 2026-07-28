@@ -13,6 +13,7 @@ CF_UNICODETEXT = 13
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 UIA_IS_PASSWORD_PROPERTY_ID = 30019
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+SW_RESTORE = 9
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -31,6 +32,14 @@ kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
 kernel32.GlobalUnlock.restype = wintypes.BOOL
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.IsWindow.argtypes = [wintypes.HWND]
+user32.IsWindow.restype = wintypes.BOOL
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.IsIconic.restype = wintypes.BOOL
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.ShowWindow.restype = wintypes.BOOL
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.SetForegroundWindow.restype = wintypes.BOOL
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.QueryFullProcessImageNameW.argtypes = [
@@ -113,6 +122,14 @@ def read_clipboard_text() -> str:
             kernel32.GlobalUnlock(handle)
     finally:
         user32.CloseClipboard()
+
+
+def restore_foreground_window(window: int) -> bool:
+    if not window or not user32.IsWindow(window):
+        return False
+    if user32.IsIconic(window):
+        user32.ShowWindow(window, SW_RESTORE)
+    return bool(user32.SetForegroundWindow(window))
 
 
 def process_name_from_window(window: int) -> str:

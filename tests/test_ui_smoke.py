@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from quicktype.i18n import Translator
 from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
-from quicktype.ui import MainWindow, SettingsDialog
+from quicktype.ui import MainWindow, QuickAccessDialog, SettingsDialog
 
 
 def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path) -> None:
@@ -61,4 +61,36 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
     assert dialog.selected_excluded_processes == {"KeePass.exe", "Code.exe"}
     dialog.deleteLater()
     window.deleteLater()
+    application.processEvents()
+
+
+def test_quick_access_filters_enabled_snippets_and_emits_choice(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    work = storage.save_snippet(
+        Snippet(
+            None,
+            ";mail",
+            "hello@example.com",
+            TriggerMode.DELIMITER,
+            category="Work",
+        )
+    )
+    storage.save_snippet(
+        Snippet(None, ";off", "Disabled", TriggerMode.IMMEDIATE, enabled=False)
+    )
+    dialog = QuickAccessDialog(storage, Translator("en"))
+    chosen: list[tuple[Snippet, int]] = []
+    dialog.snippet_chosen.connect(lambda snippet, target: chosen.append((snippet, target)))
+
+    dialog.show_for_window(12345)
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 0).text() == ";mail"
+    dialog.apply_filter("work")
+    assert not dialog.table.isRowHidden(0)
+    dialog.choose_current()
+
+    assert chosen == [(work, 12345)]
+    dialog.deleteLater()
     application.processEvents()
