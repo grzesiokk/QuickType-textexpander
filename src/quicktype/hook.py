@@ -15,7 +15,7 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .matcher import ExpansionAction, SnippetMatcher
-from .models import Snippet
+from .models import Snippet, snippet_applies_to_process
 from .template_engine import render_template
 from .windows_platform import PasswordFieldDetector, process_name_from_window, read_clipboard_text
 
@@ -219,7 +219,8 @@ class KeyboardHookEngine:
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         excluded_processes: set[str] | None = None,
     ) -> None:
-        self.matcher = SnippetMatcher(snippets or [])
+        self.matcher = SnippetMatcher([])
+        self._snippets = tuple(snippets or [])
         self.on_expansion = on_expansion
         self.on_error = on_error
         self.on_quick_access = on_quick_access
@@ -258,7 +259,10 @@ class KeyboardHookEngine:
         self.matcher.clear()
 
     def replace_snippets(self, snippets: list[Snippet]) -> None:
-        self.matcher.replace_snippets(snippets)
+        with self._active_lock:
+            self._snippets = tuple(snippets)
+            self._last_window = 0
+        self.matcher.clear()
 
     def set_excluded_processes(self, processes: set[str]) -> None:
         with self._active_lock:
@@ -390,6 +394,12 @@ class KeyboardHookEngine:
             process_name = process_name_from_window(foreground).casefold()
             with self._active_lock:
                 self._last_process_excluded = process_name in self._excluded_processes
+                applicable_snippets = [
+                    snippet
+                    for snippet in self._snippets
+                    if snippet_applies_to_process(snippet, process_name)
+                ]
+            self.matcher.replace_snippets(applicable_snippets)
         if self._last_process_excluded:
             self.matcher.clear()
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
@@ -535,6 +545,8 @@ class KeyboardHookEngine:
         with self._active_lock:
             if process_name in self._excluded_processes:
                 return False
+        if not snippet_applies_to_process(snippet, process_name):
+            return False
         action = ExpansionAction(snippet=snippet, delete_count=0)
         self._tasks.put_nowait(
             ExpansionTask(

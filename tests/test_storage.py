@@ -73,10 +73,12 @@ def test_category_is_normalized_and_persisted(storage: Storage) -> None:
             TriggerMode.IMMEDIATE,
             category="  Kontakt  ",
             favorite=True,
+            applications=("WINWORD.EXE", " Code.exe ", "code.exe"),
         )
     )
     assert saved.category == "Kontakt"
     assert saved.favorite
+    assert saved.applications == ("Code.exe", "WINWORD.EXE")
     assert storage.list_snippets()[0].category == "Kontakt"
 
 
@@ -139,6 +141,7 @@ def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None
     assert snippet.last_used_at is None
     assert snippet.category == ""
     assert not snippet.favorite
+    assert snippet.applications == ()
     assert migrated.get_setting("missing") is None
 
     connection = sqlite3.connect(path)
@@ -146,4 +149,4 @@ def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None
         "SELECT value FROM metadata WHERE key = 'schema_version'"
     ).fetchone()[0]
     connection.close()
-    assert schema_version == "4"
+    assert schema_version == "5"

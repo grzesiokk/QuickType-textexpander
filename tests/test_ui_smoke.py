@@ -26,6 +26,7 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
             True,
             category="Work",
             favorite=True,
+            applications=("WINWORD.EXE",),
         )
     )
     translator = Translator("pl")
@@ -39,6 +40,7 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
     assert window.abbreviation_edit.text() == ";sig"
     assert window.category_combo.currentText() == "Work"
     assert window.favorite_checkbox.isChecked()
+    assert window.applications_edit.text() == "WINWORD.EXE"
     assert window.mode_combo.currentData() == TriggerMode.DELIMITER.value
     assert window.category_filter.findData("Work") >= 0
 

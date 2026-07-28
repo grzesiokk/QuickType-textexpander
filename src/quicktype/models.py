@@ -23,6 +23,7 @@ class Snippet:
     last_used_at: datetime | None = None
     category: str = ""
     favorite: bool = False
+    applications: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,3 +55,29 @@ def validate_category(value: str) -> list[ValidationIssue]:
     ):
         issues.append(ValidationIssue("control", "Category cannot contain control characters."))
     return issues
+
+
+def normalize_applications(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    normalized: dict[str, str] = {}
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value:
+            continue
+        if (
+            len(value) > 128
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or "/" in value
+            or "\\" in value
+        ):
+            raise ValueError("Application names must be executable file names.")
+        normalized.setdefault(value.casefold(), value)
+    if len(normalized) > 32:
+        raise ValueError("A snippet can target at most 32 applications.")
+    return tuple(sorted(normalized.values(), key=str.casefold))
+
+
+def snippet_applies_to_process(snippet: Snippet, process_name: str) -> bool:
+    if not snippet.applications:
+        return True
+    target = process_name.casefold()
+    return any(application.casefold() == target for application in snippet.applications)

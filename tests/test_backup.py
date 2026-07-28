@@ -23,6 +23,7 @@ def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
         last_used_at=datetime(2026, 7, 28, 12, 0),
         category="Praca",
         favorite=True,
+        applications=("Code.exe", "WINWORD.EXE"),
     )
     path = tmp_path / "backup.json"
     export_backup(path, [source])
@@ -36,6 +37,7 @@ def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
     assert imported[0].last_used_at == datetime(2026, 7, 28, 12, 0)
     assert imported[0].category == "Praca"
     assert imported[0].favorite
+    assert imported[0].applications == ("Code.exe", "WINWORD.EXE")
 
 
 def test_old_backup_without_category_remains_compatible(tmp_path: Path) -> None:
@@ -59,6 +61,7 @@ def test_old_backup_without_category_remains_compatible(tmp_path: Path) -> None:
     )
     assert import_backup(path)[0].category == ""
     assert not import_backup(path)[0].favorite
+    assert import_backup(path)[0].applications == ()
 
 
 def test_backup_is_utf8_and_human_readable(tmp_path: Path) -> None:
@@ -100,6 +103,19 @@ def test_backup_is_utf8_and_human_readable(tmp_path: Path) -> None:
                     "trigger_mode": "delimiter",
                     "enabled": True,
                     "favorite": "yes",
+                }
+            ],
+        },
+        {
+            "format": "quicktype-backup",
+            "version": 1,
+            "snippets": [
+                {
+                    "abbreviation": "valid",
+                    "expansion": "x",
+                    "trigger_mode": "delimiter",
+                    "enabled": True,
+                    "applications": [r"C:\bad.exe"],
                 }
             ],
         },

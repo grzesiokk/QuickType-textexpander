@@ -35,8 +35,8 @@ Close QuickType from its tray menu before copying its database.
 
 1. Click **New** / **Nowy**.
 2. Enter an abbreviation without whitespace, for example `;sig`.
-3. Optionally assign a category, then enter the expansion text and choose a
-   trigger mode.
+3. Optionally assign a category and target applications, then enter the
+   expansion text and choose a trigger mode.
 4. Save the snippet and try it in Notepad, Word, a browser, VS Code, or Windows
    Terminal.
 
@@ -74,11 +74,20 @@ Other snippets are ordered by their usage count.
 The global shortcut can be changed immediately in Settings to
 **Ctrl+Shift+Space**, **Alt+Shift+Space**, or disabled completely.
 
+## Application-specific snippets
+
+Enter executable names such as `Code.exe`, `WINWORD.EXE`, or `chrome.exe` in a
+snippet's **Only in applications** field to restrict it to those programs.
+Separate multiple names with commas. Leave the field empty to make the snippet
+available everywhere. Application matching is case-insensitive and is applied
+to both typed abbreviations and the quick-access picker.
+
 ## Backups, statistics, and exclusions
 
 - Snippets can be organized into categories. Use the category selector above
   the list to filter the library; category names are preserved in backups.
 - Favorite status is shown with a star and is also preserved in backups.
+- Per-snippet application rules are preserved in backups.
 - **Export** creates a human-readable UTF-8 JSON backup containing all snippets
   and their usage statistics.
 - **Import** can replace the current library or merge a backup while skipping
