@@ -35,7 +35,7 @@ jobs:
 
       - name: Build QuickType.exe
         shell: pwsh
-        run: .\build.ps1 -SkipInstall
+        run: .\build.ps1
 
       - name: Show executable checksum
         shell: pwsh
