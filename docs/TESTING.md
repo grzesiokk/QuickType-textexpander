@@ -30,10 +30,13 @@ Before publishing a release:
 5. Confirm application-specific snippets and excluded applications.
 6. Confirm pause/resume, tray reopening, single instance, and optional
    autostart.
-7. Edit, duplicate, delete, export, and import snippets.
-8. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+7. Edit, duplicate, delete, export, and import snippets. Verify the right-click
+   actions and double-click toggles in the snippet list.
+8. Restore an automatic backup and confirm that the previous state is saved as
+   `QuickType-before-restore-*.json`.
+9. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
-9. Confirm that expansion does not run in QuickType's editor or a recognized
+10. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
-10. Close QuickType from the tray and start it again to confirm data
+11. Close QuickType from the tray and start it again to confirm data
     persistence.

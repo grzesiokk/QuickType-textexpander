@@ -15,6 +15,20 @@ AUTO_BACKUP_PATTERN = re.compile(
 )
 
 
+def list_automatic_backups(directory: Path) -> list[Path]:
+    location = Path(directory)
+    if not location.exists():
+        return []
+    return sorted(
+        (
+            path
+            for path in location.iterdir()
+            if path.is_file() and AUTO_BACKUP_PATTERN.fullmatch(path.name)
+        ),
+        reverse=True,
+    )
+
+
 class AutomaticBackupManager:
     def __init__(self, storage: Storage, *, retention: int = 20) -> None:
         if retention < 1:
@@ -42,11 +56,7 @@ class AutomaticBackupManager:
     def _prune(self) -> None:
         if not self.directory.exists():
             return
-        backups = sorted(
-            path
-            for path in self.directory.iterdir()
-            if path.is_file() and AUTO_BACKUP_PATTERN.fullmatch(path.name)
-        )
+        backups = list(reversed(list_automatic_backups(self.directory)))
         for path in backups[:-self.retention]:
             path.unlink()
 

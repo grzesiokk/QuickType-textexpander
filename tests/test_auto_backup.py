@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from quicktype.auto_backup import AUTO_BACKUP_PATTERN, AutomaticBackupManager
+from quicktype.auto_backup import (
+    AUTO_BACKUP_PATTERN,
+    AutomaticBackupManager,
+    list_automatic_backups,
+)
 from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
 
@@ -50,3 +54,7 @@ def test_automatic_backup_prunes_only_its_own_old_files(tmp_path: Path) -> None:
     ]
     assert len(automatic) == 2
     assert unrelated.read_text(encoding="utf-8") == "keep"
+    assert list_automatic_backups(manager.directory) == sorted(
+        automatic,
+        reverse=True,
+    )
