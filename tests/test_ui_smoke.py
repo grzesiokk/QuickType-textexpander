@@ -60,8 +60,10 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
         autostart=False,
         excluded_processes={"KeePass.exe", "Code.exe"},
         database_path=storage.path,
+        quick_access_hotkey="ctrl_shift_space",
     )
     assert dialog.selected_excluded_processes == {"KeePass.exe", "Code.exe"}
+    assert dialog.selected_quick_access_hotkey == "ctrl_shift_space"
     dialog.deleteLater()
     window.deleteLater()
     application.processEvents()
@@ -102,6 +104,9 @@ def test_quick_access_filters_enabled_snippets_and_emits_choice(tmp_path: Path) 
     assert dialog.table.item(0, 0).text() == "★"
     assert dialog.table.item(0, 1).text() == ";mail"
     assert dialog.table.item(1, 1).text() == ";often"
+    assert "Ctrl+Alt+Space" in dialog.hint_label.text()
+    dialog.set_hotkey("alt_shift_space")
+    assert "Alt+Shift+Space" in dialog.hint_label.text()
     dialog.apply_filter("work")
     assert not dialog.table.isRowHidden(0)
     dialog.choose_current()

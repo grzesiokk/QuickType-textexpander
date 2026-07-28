@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .constants import INJECTED_EVENT_MARKER
+from .hotkeys import (
+    DEFAULT_QUICK_ACCESS_HOTKEY,
+    hotkey_matches,
+    normalize_quick_access_hotkey,
+)
 from .matcher import ExpansionAction, SnippetMatcher
 from .models import Snippet
 from .template_engine import render_template
@@ -211,12 +216,16 @@ class KeyboardHookEngine:
         on_expansion: Callable[[Snippet], None] | None = None,
         on_error: Callable[[str], None] | None = None,
         on_quick_access: Callable[[int], None] | None = None,
+        quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         excluded_processes: set[str] | None = None,
     ) -> None:
         self.matcher = SnippetMatcher(snippets or [])
         self.on_expansion = on_expansion
         self.on_error = on_error
         self.on_quick_access = on_quick_access
+        self._quick_access_hotkey = normalize_quick_access_hotkey(
+            quick_access_hotkey
+        )
         self._active = True
         self._active_lock = threading.Lock()
         self._tasks: queue.Queue[ExpansionTask | None] = queue.Queue()
@@ -259,6 +268,11 @@ class KeyboardHookEngine:
             self._last_window = 0
             self._last_process_excluded = False
         self.matcher.clear()
+
+    def set_quick_access_hotkey(self, hotkey: str) -> None:
+        with self._active_lock:
+            self._quick_access_hotkey = normalize_quick_access_hotkey(hotkey)
+            self._quick_access_pressed = False
 
     def start(self) -> None:
         if self._hook_thread and self._hook_thread.is_alive():
@@ -497,12 +511,22 @@ class KeyboardHookEngine:
     def _quick_access_modifier_is_down(self) -> bool:
         control = bool(user32.GetKeyState(VK_CONTROL) & 0x8000)
         alt = bool(user32.GetKeyState(VK_MENU) & 0x8000)
+        shift = bool(user32.GetKeyState(VK_SHIFT) & 0x8000)
         right_alt = bool(user32.GetKeyState(VK_RMENU) & 0x8000)
         windows = bool(
             (user32.GetKeyState(VK_LWIN) & 0x8000)
             or (user32.GetKeyState(VK_RWIN) & 0x8000)
         )
-        return control and alt and not right_alt and not windows
+        with self._active_lock:
+            hotkey = self._quick_access_hotkey
+        return hotkey_matches(
+            hotkey,
+            control=control,
+            alt=alt,
+            shift=shift,
+            right_alt=right_alt,
+            windows=windows,
+        )
 
     def expand_directly(self, snippet: Snippet, foreground_window: int) -> bool:
         if not foreground_window or self._is_own_window(foreground_window):

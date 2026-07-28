@@ -71,6 +71,9 @@ typed abbreviations. **Esc** closes the quick-access window without inserting.
 Mark important snippets as favorites to keep them at the top of this list.
 Other snippets are ordered by their usage count.
 
+The global shortcut can be changed immediately in Settings to
+**Ctrl+Shift+Space**, **Alt+Shift+Space**, or disabled completely.
+
 ## Backups, statistics, and exclusions
 
 - Snippets can be organized into categories. Use the category selector above
