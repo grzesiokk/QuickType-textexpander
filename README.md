@@ -4,6 +4,10 @@ QuickType is a private, portable text expander for 64-bit Windows 11. It runs
 locally, stores its SQLite database beside the executable, and does not require
 Python on the target computer.
 
+## Application preview
+
+![QuickType running on Windows 11](docs/quicktype-screenshot.png)
+
 ## Ready-to-use application
 
 **[Download the latest QuickType.exe](https://github.com/grzesiokk/textexpander/releases/latest/download/QuickType.exe)**
