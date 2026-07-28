@@ -6,7 +6,12 @@ Python on the target computer.
 
 ## Ready-to-use application
 
-The built application is located at:
+**[Download the latest QuickType.exe](https://github.com/grzesiokk/textexpander/releases/latest/download/QuickType.exe)**
+
+Prebuilt Windows binaries are published under
+[GitHub Releases](https://github.com/grzesiokk/textexpander/releases). The
+`dist` directory is intentionally not committed to Git. When building the
+project locally, the resulting application is created at:
 
 ```text
 dist\QuickType.exe
