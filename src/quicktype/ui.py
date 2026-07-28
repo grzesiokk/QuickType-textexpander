@@ -49,6 +49,7 @@ from .i18n import Translator
 from .models import (
     Snippet,
     TriggerMode,
+    next_copy_abbreviation,
     normalize_applications,
     snippet_applies_to_process,
     validate_abbreviation,
@@ -83,6 +84,7 @@ class SettingsDialog(QDialog):
         autostart: bool,
         excluded_processes: set[str],
         database_path: Path,
+        automatic_backups: bool = True,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         parent: QWidget | None = None,
     ) -> None:
@@ -106,6 +108,10 @@ class SettingsDialog(QDialog):
         self.autostart_checkbox = QCheckBox(self.t("autostart"))
         self.autostart_checkbox.setChecked(autostart)
         form.addRow("", self.autostart_checkbox)
+
+        self.automatic_backups_checkbox = QCheckBox(self.t("automatic_backups"))
+        self.automatic_backups_checkbox.setChecked(automatic_backups)
+        form.addRow("", self.automatic_backups_checkbox)
 
         self.quick_access_hotkey_combo = QComboBox()
         for hotkey in HOTKEY_SPECS:
@@ -335,6 +341,7 @@ class MainWindow(QMainWindow):
     language_change_requested = Signal(str)
     active_change_requested = Signal(bool)
     autostart_change_requested = Signal(bool)
+    automatic_backups_change_requested = Signal(bool)
     excluded_processes_change_requested = Signal(object)
     quick_access_hotkey_change_requested = Signal(str)
     snippets_changed = Signal()
@@ -347,6 +354,7 @@ class MainWindow(QMainWindow):
         *,
         engine_active: bool,
         autostart: bool,
+        automatic_backups: bool = True,
         excluded_processes: set[str] | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
     ) -> None:
@@ -355,6 +363,7 @@ class MainWindow(QMainWindow):
         self.t = translator
         self.engine_active = engine_active
         self.autostart = autostart
+        self.automatic_backups = automatic_backups
         self.excluded_processes = set(excluded_processes or set())
         self.quick_access_hotkey = normalize_quick_access_hotkey(
             quick_access_hotkey
@@ -383,6 +392,11 @@ class MainWindow(QMainWindow):
         self.new_action.setShortcut(QKeySequence.StandardKey.New)
         self.new_action.triggered.connect(self.new_snippet)
         toolbar.addAction(self.new_action)
+
+        self.duplicate_action = QAction(self)
+        self.duplicate_action.setShortcut(QKeySequence("Ctrl+D"))
+        self.duplicate_action.triggered.connect(self.duplicate_current)
+        toolbar.addAction(self.duplicate_action)
 
         self.delete_action = QAction(self)
         self.delete_action.setShortcut(QKeySequence.StandardKey.Delete)
@@ -571,6 +585,7 @@ class MainWindow(QMainWindow):
     def retranslate(self) -> None:
         self.setWindowTitle(self.t("app_title"))
         self.new_action.setText(self.t("new"))
+        self.duplicate_action.setText(self.t("duplicate"))
         self.delete_action.setText(self.t("delete"))
         self.import_action.setText(self.t("import"))
         self.export_action.setText(self.t("export"))
@@ -748,7 +763,7 @@ class MainWindow(QMainWindow):
                 if item and item.data(ID_ROLE) == snippet_id:
                     self.table.selectRow(row)
                     snippet = next((entry for entry in self.snippets if entry.id == snippet_id), None)
-                    if snippet and self._current_id != snippet_id:
+                    if snippet:
                         self._load_snippet(snippet)
                     break
         finally:
@@ -904,6 +919,40 @@ class MainWindow(QMainWindow):
         self.snippets_changed.emit()
         self.status_message.setText(self.t("deleted"))
 
+    def duplicate_current(self) -> None:
+        if not self._maybe_resolve_dirty() or self._current_id is None:
+            return
+        source = next(
+            (entry for entry in self.snippets if entry.id == self._current_id),
+            None,
+        )
+        if source is None:
+            return
+        abbreviation = next_copy_abbreviation(
+            source.abbreviation,
+            {entry.abbreviation for entry in self.snippets},
+        )
+        duplicate = self.storage.save_snippet(
+            Snippet(
+                id=None,
+                abbreviation=abbreviation,
+                expansion=source.expansion,
+                trigger_mode=source.trigger_mode,
+                enabled=source.enabled,
+                category=source.category,
+                favorite=source.favorite,
+                applications=source.applications,
+            )
+        )
+        self._current_id = duplicate.id
+        self._is_new = False
+        self._dirty = False
+        self.reload_snippets(select_id=duplicate.id)
+        self.snippets_changed.emit()
+        self.status_message.setText(
+            self.t("duplicated", abbr=duplicate.abbreviation)
+        )
+
     def export_snippets(self) -> None:
         if not self._maybe_resolve_dirty():
             return
@@ -1052,6 +1101,7 @@ class MainWindow(QMainWindow):
             language=self.t.language,
             engine_active=self.engine_active,
             autostart=self.autostart,
+            automatic_backups=self.automatic_backups,
             excluded_processes=self.excluded_processes,
             database_path=self.storage.path,
             quick_access_hotkey=self.quick_access_hotkey,
@@ -1065,6 +1115,10 @@ class MainWindow(QMainWindow):
             self.active_change_requested.emit(dialog.active_checkbox.isChecked())
         if dialog.autostart_checkbox.isChecked() != self.autostart:
             self.autostart_change_requested.emit(dialog.autostart_checkbox.isChecked())
+        if dialog.automatic_backups_checkbox.isChecked() != self.automatic_backups:
+            self.automatic_backups_change_requested.emit(
+                dialog.automatic_backups_checkbox.isChecked()
+            )
         if dialog.selected_excluded_processes != self.excluded_processes:
             self.excluded_processes_change_requested.emit(
                 dialog.selected_excluded_processes
@@ -1082,6 +1136,9 @@ class MainWindow(QMainWindow):
 
     def set_autostart(self, enabled: bool) -> None:
         self.autostart = enabled
+
+    def set_automatic_backups(self, enabled: bool) -> None:
+        self.automatic_backups = enabled
 
     def set_excluded_processes(self, processes: set[str]) -> None:
         self.excluded_processes = set(processes)

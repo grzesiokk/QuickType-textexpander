@@ -1,0 +1,39 @@
+# QuickType release verification
+
+## Automated
+
+Run the complete test suite:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Build the portable executable:
+
+```powershell
+.\build.ps1 -SkipInstall
+```
+
+GitHub Actions repeats both operations on a clean Windows runner and publishes
+`QuickType.exe` as a workflow artifact for 14 days.
+
+## Manual Windows 11 checklist
+
+Before publishing a release:
+
+1. Start `dist\QuickType.exe` from a writable folder and confirm that
+   `QuickTypeData\quicktype.sqlite3` is created.
+2. Test immediate and delimiter snippets in Notepad.
+3. Test multiline text, Polish characters, clipboard, date, time, and
+   `{{cursor}}`.
+4. Test the quick-access shortcut in Word or a browser.
+5. Confirm application-specific snippets and excluded applications.
+6. Confirm pause/resume, tray reopening, single instance, and optional
+   autostart.
+7. Edit, duplicate, delete, export, and import snippets.
+8. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+   backup files.
+9. Confirm that expansion does not run in QuickType's editor or a recognized
+   password field.
+10. Close QuickType from the tray and start it again to confirm data
+    persistence.

@@ -10,6 +10,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
+from .auto_backup import AutomaticBackupManager
 from .hook import KeyboardHookEngine
 from .hotkeys import normalize_quick_access_hotkey
 from .i18n import Translator
@@ -47,6 +48,8 @@ class QuickTypeController:
         )
         repair_autostart_if_enabled()
         autostart = is_autostart_enabled()
+        automatic_backups = self.storage.get_setting("automatic_backups", "1") != "0"
+        self.backups = AutomaticBackupManager(self.storage)
 
         self.signals = EngineSignals()
         self.engine = KeyboardHookEngine(
@@ -62,6 +65,7 @@ class QuickTypeController:
             self.translator,
             engine_active=active,
             autostart=autostart,
+            automatic_backups=automatic_backups,
             excluded_processes=excluded_processes,
             quick_access_hotkey=quick_access_hotkey,
         )
@@ -85,6 +89,9 @@ class QuickTypeController:
         self.window.language_change_requested.connect(self.set_language)
         self.window.active_change_requested.connect(self.set_active)
         self.window.autostart_change_requested.connect(self.set_autostart_enabled)
+        self.window.automatic_backups_change_requested.connect(
+            self.set_automatic_backups
+        )
         self.window.excluded_processes_change_requested.connect(
             self.set_excluded_processes
         )
@@ -101,6 +108,8 @@ class QuickTypeController:
 
         self.engine.set_active(active)
         self.engine.start()
+        if automatic_backups and self.storage.list_snippets():
+            self._create_automatic_backup()
 
         first_run = self.storage.get_setting("first_run_done", "0") != "1"
         if first_run:
@@ -155,7 +164,27 @@ class QuickTypeController:
         self.tray.set_autostart(enabled)
 
     def refresh_snippets(self) -> None:
-        self.engine.replace_snippets(self.storage.list_snippets())
+        snippets = self.storage.list_snippets()
+        self.engine.replace_snippets(snippets)
+        if self.window.automatic_backups:
+            self._create_automatic_backup(snippets)
+
+    def set_automatic_backups(self, enabled: bool) -> None:
+        self.storage.set_setting("automatic_backups", "1" if enabled else "0")
+        self.window.set_automatic_backups(enabled)
+        if enabled:
+            self._create_automatic_backup()
+
+    def _create_automatic_backup(
+        self,
+        snippets: list[Snippet] | None = None,
+    ) -> None:
+        try:
+            self.backups.create_if_changed(snippets)
+        except OSError as error:
+            text = self.translator("automatic_backup_error", error=str(error))
+            self.window.status_message.setText(text)
+            self.tray.show_error(text)
 
     def set_excluded_processes(self, processes: object) -> None:
         if not isinstance(processes, set):
