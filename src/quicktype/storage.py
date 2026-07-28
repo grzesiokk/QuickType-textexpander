@@ -8,7 +8,7 @@ from typing import Iterator
 
 from .models import Snippet, TriggerMode, validate_abbreviation, validate_category
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class DuplicateAbbreviationError(ValueError):
@@ -44,7 +44,8 @@ class Storage:
                     updated_at TEXT NOT NULL,
                     usage_count INTEGER NOT NULL DEFAULT 0,
                     last_used_at TEXT,
-                    category TEXT NOT NULL DEFAULT ''
+                    category TEXT NOT NULL DEFAULT '',
+                    favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0, 1))
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_snippets_enabled
@@ -64,6 +65,10 @@ class Storage:
             if "category" not in columns:
                 connection.execute(
                     "ALTER TABLE snippets ADD COLUMN category TEXT NOT NULL DEFAULT ''"
+                )
+            if "favorite" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
                 )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_snippets_category "
@@ -94,7 +99,7 @@ class Storage:
             rows = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at, category
+                       usage_count, last_used_at, category, favorite
                 FROM snippets
                 ORDER BY abbreviation COLLATE NOCASE, id
                 """
@@ -106,7 +111,7 @@ class Storage:
             row = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at, category
+                       usage_count, last_used_at, category, favorite
                 FROM snippets WHERE id = ?
                 """,
                 (snippet_id,),
@@ -130,8 +135,8 @@ class Storage:
                         """
                         INSERT INTO snippets(
                             abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                            usage_count, last_used_at, category
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            usage_count, last_used_at, category, favorite
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             snippet.abbreviation,
@@ -145,6 +150,7 @@ class Storage:
                             if snippet.last_used_at
                             else None,
                             category,
+                            int(snippet.favorite),
                         ),
                     )
                     snippet_id = int(cursor.lastrowid)
@@ -153,7 +159,7 @@ class Storage:
                         """
                         UPDATE snippets
                         SET abbreviation = ?, expansion = ?, trigger_mode = ?,
-                            enabled = ?, updated_at = ?, category = ?
+                            enabled = ?, updated_at = ?, category = ?, favorite = ?
                         WHERE id = ?
                         """,
                         (
@@ -163,6 +169,7 @@ class Storage:
                             int(snippet.enabled),
                             timestamp,
                             category,
+                            int(snippet.favorite),
                             snippet.id,
                         ),
                     )
@@ -240,8 +247,8 @@ class Storage:
                     """
                     INSERT INTO snippets(
                         abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                        usage_count, last_used_at, category
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        usage_count, last_used_at, category, favorite
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snippet.abbreviation,
@@ -255,6 +262,7 @@ class Storage:
                         if snippet.last_used_at
                         else None,
                         snippet.category.strip(),
+                        int(snippet.favorite),
                     ),
                 )
                 existing.add(snippet.abbreviation)
@@ -293,4 +301,5 @@ class Storage:
                 else None
             ),
             category=str(row["category"]),
+            favorite=bool(row["favorite"]),
         )

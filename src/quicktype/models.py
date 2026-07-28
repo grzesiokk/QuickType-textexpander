@@ -22,6 +22,7 @@ class Snippet:
     usage_count: int = 0
     last_used_at: datetime | None = None
     category: str = ""
+    favorite: bool = False
 
 
 @dataclass(frozen=True, slots=True)

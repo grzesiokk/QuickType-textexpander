@@ -160,14 +160,15 @@ class QuickAccessDialog(QDialog):
         self.search_edit.returnPressed.connect(self.choose_current)
         layout.addWidget(self.search_edit)
 
-        self.table = QTableWidget(0, 3)
+        self.table = QTableWidget(0, 4)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 150)
-        self.table.setColumnWidth(1, 140)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 38)
+        self.table.setColumnWidth(1, 150)
+        self.table.setColumnWidth(2, 140)
         self.table.itemDoubleClicked.connect(lambda _item: self.choose_current())
         layout.addWidget(self.table, 1)
 
@@ -181,6 +182,7 @@ class QuickAccessDialog(QDialog):
         self.search_edit.setPlaceholderText(self.t("quick_access_search"))
         self.table.setHorizontalHeaderLabels(
             [
+                self.t("favorite_column"),
                 self.t("shortcut_column"),
                 self.t("category_column"),
                 self.t("expansion"),
@@ -192,7 +194,14 @@ class QuickAccessDialog(QDialog):
 
     def show_for_window(self, target_window: int) -> None:
         self._target_window = target_window
-        self.snippets = [snippet for snippet in self.storage.list_snippets() if snippet.enabled]
+        self.snippets = sorted(
+            (snippet for snippet in self.storage.list_snippets() if snippet.enabled),
+            key=lambda snippet: (
+                not snippet.favorite,
+                -snippet.usage_count,
+                snippet.abbreviation.casefold(),
+            ),
+        )
         self._populate_table()
         self.search_edit.clear()
         self.show()
@@ -205,6 +214,9 @@ class QuickAccessDialog(QDialog):
         for snippet in self.snippets:
             row = self.table.rowCount()
             self.table.insertRow(row)
+            favorite = QTableWidgetItem("★" if snippet.favorite else "")
+            favorite.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            favorite.setData(ID_ROLE, snippet.id)
             abbreviation = QTableWidgetItem(snippet.abbreviation)
             abbreviation.setData(ID_ROLE, snippet.id)
             category = QTableWidgetItem(
@@ -214,9 +226,10 @@ class QuickAccessDialog(QDialog):
             preview = render_template(snippet.expansion, clipboard_text="").text
             preview_item = QTableWidgetItem(preview.replace("\r", "").replace("\n", " ↵ "))
             preview_item.setData(ID_ROLE, snippet.id)
-            self.table.setItem(row, 0, abbreviation)
-            self.table.setItem(row, 1, category)
-            self.table.setItem(row, 2, preview_item)
+            self.table.setItem(row, 0, favorite)
+            self.table.setItem(row, 1, abbreviation)
+            self.table.setItem(row, 2, category)
+            self.table.setItem(row, 3, preview_item)
         self._select_first_visible()
 
     def apply_filter(self, text: str) -> None:
@@ -366,16 +379,17 @@ class MainWindow(QMainWindow):
         filters.addWidget(self.category_filter)
         layout.addLayout(filters)
 
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 6)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 44)
-        self.table.setColumnWidth(2, 125)
-        self.table.setColumnWidth(3, 115)
-        self.table.setColumnWidth(4, 65)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 38)
+        self.table.setColumnWidth(1, 44)
+        self.table.setColumnWidth(3, 125)
+        self.table.setColumnWidth(4, 115)
+        self.table.setColumnWidth(5, 65)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
 
@@ -427,9 +441,12 @@ class MainWindow(QMainWindow):
         self.enabled_checkbox = QCheckBox()
         self.enabled_checkbox.toggled.connect(self._editor_changed)
         form.addWidget(self.enabled_checkbox, 3, 1)
+        self.favorite_checkbox = QCheckBox()
+        self.favorite_checkbox.toggled.connect(self._editor_changed)
+        form.addWidget(self.favorite_checkbox, 4, 1)
         self.stats_label = QLabel()
         self.stats_label.setProperty("kind", "muted")
-        form.addWidget(self.stats_label, 4, 1)
+        form.addWidget(self.stats_label, 5, 1)
         form.setColumnStretch(1, 1)
         layout.addLayout(form)
 
@@ -488,6 +505,7 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
         self.table.setHorizontalHeaderLabels(
             [
+                self.t("favorite_column"),
                 self.t("active_column"),
                 self.t("shortcut_column"),
                 self.t("category_column"),
@@ -509,6 +527,7 @@ class MainWindow(QMainWindow):
             self.mode_combo.setCurrentIndex(max(0, mode_index))
         self._refresh_category_controls()
         self.enabled_checkbox.setText(self.t("enabled"))
+        self.favorite_checkbox.setText(self.t("favorite"))
         self.expansion_label.setText(self.t("expansion"))
         self.variables_label.setText(self.t("variables") + ":")
         for token, button in self.variable_buttons.items():
@@ -543,6 +562,9 @@ class MainWindow(QMainWindow):
             for snippet in self.snippets:
                 row = self.table.rowCount()
                 self.table.insertRow(row)
+                favorite = QTableWidgetItem("★" if snippet.favorite else "")
+                favorite.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                favorite.setData(ID_ROLE, snippet.id)
                 enabled = QTableWidgetItem("●" if snippet.enabled else "○")
                 enabled.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 enabled.setData(ID_ROLE, snippet.id)
@@ -561,11 +583,12 @@ class MainWindow(QMainWindow):
                 usage = QTableWidgetItem(str(snippet.usage_count))
                 usage.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 usage.setData(ID_ROLE, snippet.id)
-                self.table.setItem(row, 0, enabled)
-                self.table.setItem(row, 1, abbreviation)
-                self.table.setItem(row, 2, category)
-                self.table.setItem(row, 3, mode)
-                self.table.setItem(row, 4, usage)
+                self.table.setItem(row, 0, favorite)
+                self.table.setItem(row, 1, enabled)
+                self.table.setItem(row, 2, abbreviation)
+                self.table.setItem(row, 3, category)
+                self.table.setItem(row, 4, mode)
+                self.table.setItem(row, 5, usage)
         self.apply_filter(self.search_edit.text())
         if selected_id is not None:
             self._select_id(selected_id)
@@ -575,7 +598,7 @@ class MainWindow(QMainWindow):
         needle = text.strip().casefold()
         selected_category = self.category_filter.currentData()
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 1)
+            item = self.table.item(row, 2)
             snippet_id = item.data(ID_ROLE)
             snippet = next((entry for entry in self.snippets if entry.id == snippet_id), None)
             matches_text = not needle or (
@@ -661,6 +684,7 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.category_combo),
                 QSignalBlocker(self.mode_combo),
                 QSignalBlocker(self.enabled_checkbox),
+                QSignalBlocker(self.favorite_checkbox),
                 QSignalBlocker(self.expansion_edit),
             ):
                 self.abbreviation_edit.setText(snippet.abbreviation)
@@ -669,6 +693,7 @@ class MainWindow(QMainWindow):
                     self.mode_combo.findData(snippet.trigger_mode.value)
                 )
                 self.enabled_checkbox.setChecked(snippet.enabled)
+                self.favorite_checkbox.setChecked(snippet.favorite)
                 self.expansion_edit.setPlainText(snippet.expansion)
             self.editor_panel.setEnabled(True)
             self._dirty = False
@@ -690,6 +715,7 @@ class MainWindow(QMainWindow):
             self.category_combo.setEditText("")
             self.mode_combo.setCurrentIndex(self.mode_combo.findData(TriggerMode.DELIMITER.value))
             self.enabled_checkbox.setChecked(True)
+            self.favorite_checkbox.setChecked(False)
             self.expansion_edit.clear()
             self._dirty = False
             self.abbreviation_edit.setFocus()
@@ -735,6 +761,7 @@ class MainWindow(QMainWindow):
             trigger_mode=TriggerMode(str(self.mode_combo.currentData())),
             enabled=self.enabled_checkbox.isChecked(),
             category=category,
+            favorite=self.favorite_checkbox.isChecked(),
         )
         try:
             saved = self.storage.save_snippet(snippet)
@@ -963,7 +990,7 @@ class MainWindow(QMainWindow):
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
             if item and item.data(ID_ROLE) == snippet.id:
-                self.table.item(row, 4).setText(str(snippet.usage_count))
+                self.table.item(row, 5).setText(str(snippet.usage_count))
                 break
         if self._current_id == snippet.id:
             self._update_stats_label(snippet)

@@ -59,11 +59,14 @@ enabled snippets. Search by abbreviation, category, or expansion text, then
 press **Enter** to insert the selected snippet into the original window.
 Template variables and the cursor marker are rendered in the same way as with
 typed abbreviations. **Esc** closes the quick-access window without inserting.
+Mark important snippets as favorites to keep them at the top of this list.
+Other snippets are ordered by their usage count.
 
 ## Backups, statistics, and exclusions
 
 - Snippets can be organized into categories. Use the category selector above
   the list to filter the library; category names are preserved in backups.
+- Favorite status is shown with a star and is also preserved in backups.
 - **Export** creates a human-readable UTF-8 JSON backup containing all snippets
   and their usage statistics.
 - **Import** can replace the current library or merge a backup while skipping

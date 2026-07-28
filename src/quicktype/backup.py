@@ -76,6 +76,7 @@ def _snippet_to_dict(snippet: Snippet) -> dict[str, Any]:
         if snippet.last_used_at
         else None,
         "category": snippet.category,
+        "favorite": snippet.favorite,
     }
 
 
@@ -88,6 +89,7 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
     enabled = value.get("enabled")
     usage_count = value.get("usage_count", 0)
     category = value.get("category", "")
+    favorite = value.get("favorite", False)
 
     if not isinstance(abbreviation, str) or validate_abbreviation(abbreviation):
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid abbreviation.")
@@ -110,6 +112,8 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         )
     ):
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid category.")
+    if not isinstance(favorite, bool):
+        raise BackupFormatError(f"Snippet #{index + 1} has an invalid favorite value.")
 
     return Snippet(
         id=None,
@@ -122,6 +126,7 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         usage_count=usage_count,
         last_used_at=_optional_datetime(value.get("last_used_at"), index, "last_used_at"),
         category=category.strip(),
+        favorite=favorite,
     )
 
 
