@@ -78,6 +78,41 @@ def test_quick_access_modifier_rejects_altgr(monkeypatch) -> None:
     assert not engine._quick_access_modifier_is_down()
 
 
+def test_quick_access_chord_is_suppressed_and_emitted_once_per_press(
+    monkeypatch,
+) -> None:
+    class FakeUser32:
+        def GetKeyState(self, key: int) -> int:
+            return (
+                0x8000
+                if key in {hook_module.VK_CONTROL, hook_module.VK_MENU}
+                else 0
+            )
+
+        def GetForegroundWindow(self) -> int:
+            return 2468
+
+    windows: list[int] = []
+    engine = KeyboardHookEngine([], on_quick_access=windows.append)
+    monkeypatch.setattr(engine, "_is_own_window", lambda _window: False)
+    monkeypatch.setattr(hook_module, "user32", FakeUser32())
+    event = hook_module.KBDLLHOOKSTRUCT(
+        vkCode=hook_module.VK_SPACE,
+        scanCode=0,
+        flags=0,
+        time=0,
+        dwExtraInfo=0,
+    )
+    pointer = ctypes.addressof(event)
+
+    assert engine._keyboard_proc(0, hook_module.WM_KEYDOWN, pointer) == 1
+    assert engine._keyboard_proc(0, hook_module.WM_KEYDOWN, pointer) == 1
+    assert windows == [2468]
+    assert engine._keyboard_proc(0, hook_module.WM_KEYUP, pointer) == 1
+    assert engine._keyboard_proc(0, hook_module.WM_KEYDOWN, pointer) == 1
+    assert windows == [2468, 2468]
+
+
 def test_direct_expansion_is_queued_without_requiring_active(monkeypatch) -> None:
     engine = KeyboardHookEngine([])
     snippet = Snippet(None, ";sig", "Regards", TriggerMode.DELIMITER)
