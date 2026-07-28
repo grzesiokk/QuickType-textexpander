@@ -135,3 +135,12 @@ def test_direct_expansion_is_queued_without_requiring_active(monkeypatch) -> Non
     assert not task.require_active
     with pytest.raises(queue.Empty):
         engine._tasks.get_nowait()
+
+    scoped = Snippet(
+        None,
+        ";code",
+        "Code only",
+        TriggerMode.IMMEDIATE,
+        applications=("Code.exe",),
+    )
+    assert not engine.expand_directly(scoped, 42)

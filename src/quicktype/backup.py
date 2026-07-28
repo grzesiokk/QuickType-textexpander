@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import Snippet, TriggerMode, validate_abbreviation
+from .models import (
+    Snippet,
+    TriggerMode,
+    normalize_applications,
+    validate_abbreviation,
+)
 
 BACKUP_FORMAT = "quicktype-backup"
 BACKUP_VERSION = 1
@@ -77,6 +82,7 @@ def _snippet_to_dict(snippet: Snippet) -> dict[str, Any]:
         else None,
         "category": snippet.category,
         "favorite": snippet.favorite,
+        "applications": list(snippet.applications),
     }
 
 
@@ -90,6 +96,7 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
     usage_count = value.get("usage_count", 0)
     category = value.get("category", "")
     favorite = value.get("favorite", False)
+    applications = value.get("applications", [])
 
     if not isinstance(abbreviation, str) or validate_abbreviation(abbreviation):
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid abbreviation.")
@@ -114,6 +121,16 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid category.")
     if not isinstance(favorite, bool):
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid favorite value.")
+    if not isinstance(applications, list) or not all(
+        isinstance(item, str) for item in applications
+    ):
+        raise BackupFormatError(f"Snippet #{index + 1} has invalid applications.")
+    try:
+        normalized_applications = normalize_applications(applications)
+    except ValueError as error:
+        raise BackupFormatError(
+            f"Snippet #{index + 1} has invalid applications."
+        ) from error
 
     return Snippet(
         id=None,
@@ -127,6 +144,7 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         last_used_at=_optional_datetime(value.get("last_used_at"), index, "last_used_at"),
         category=category.strip(),
         favorite=favorite,
+        applications=normalized_applications,
     )
 
 

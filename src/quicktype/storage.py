@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from .models import Snippet, TriggerMode, validate_abbreviation, validate_category
+from .models import (
+    Snippet,
+    TriggerMode,
+    normalize_applications,
+    validate_abbreviation,
+    validate_category,
+)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class DuplicateAbbreviationError(ValueError):
@@ -45,7 +52,8 @@ class Storage:
                     usage_count INTEGER NOT NULL DEFAULT 0,
                     last_used_at TEXT,
                     category TEXT NOT NULL DEFAULT '',
-                    favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0, 1))
+                    favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0, 1)),
+                    applications TEXT NOT NULL DEFAULT '[]'
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_snippets_enabled
@@ -69,6 +77,10 @@ class Storage:
             if "favorite" not in columns:
                 connection.execute(
                     "ALTER TABLE snippets ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
+                )
+            if "applications" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN applications TEXT NOT NULL DEFAULT '[]'"
                 )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_snippets_category "
@@ -99,7 +111,7 @@ class Storage:
             rows = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at, category, favorite
+                       usage_count, last_used_at, category, favorite, applications
                 FROM snippets
                 ORDER BY abbreviation COLLATE NOCASE, id
                 """
@@ -111,7 +123,7 @@ class Storage:
             row = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at, category, favorite
+                       usage_count, last_used_at, category, favorite, applications
                 FROM snippets WHERE id = ?
                 """,
                 (snippet_id,),
@@ -126,6 +138,7 @@ class Storage:
         category_issues = validate_category(category)
         if category_issues:
             raise ValueError(category_issues[0].message)
+        applications = normalize_applications(snippet.applications)
         timestamp = datetime.now().isoformat(timespec="seconds")
 
         try:
@@ -135,8 +148,8 @@ class Storage:
                         """
                         INSERT INTO snippets(
                             abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                            usage_count, last_used_at, category, favorite
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            usage_count, last_used_at, category, favorite, applications
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             snippet.abbreviation,
@@ -151,6 +164,7 @@ class Storage:
                             else None,
                             category,
                             int(snippet.favorite),
+                            json.dumps(applications, ensure_ascii=False),
                         ),
                     )
                     snippet_id = int(cursor.lastrowid)
@@ -159,7 +173,8 @@ class Storage:
                         """
                         UPDATE snippets
                         SET abbreviation = ?, expansion = ?, trigger_mode = ?,
-                            enabled = ?, updated_at = ?, category = ?, favorite = ?
+                            enabled = ?, updated_at = ?, category = ?, favorite = ?,
+                            applications = ?
                         WHERE id = ?
                         """,
                         (
@@ -170,6 +185,7 @@ class Storage:
                             timestamp,
                             category,
                             int(snippet.favorite),
+                            json.dumps(applications, ensure_ascii=False),
                             snippet.id,
                         ),
                     )
@@ -211,6 +227,7 @@ class Storage:
             category_issues = validate_category(snippet.category.strip())
             if category_issues:
                 raise ValueError(category_issues[0].message)
+            normalize_applications(snippet.applications)
 
         abbreviations = [snippet.abbreviation for snippet in snippets]
         if len(abbreviations) != len(set(abbreviations)):
@@ -247,8 +264,8 @@ class Storage:
                     """
                     INSERT INTO snippets(
                         abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                        usage_count, last_used_at, category, favorite
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        usage_count, last_used_at, category, favorite, applications
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snippet.abbreviation,
@@ -263,6 +280,10 @@ class Storage:
                         else None,
                         snippet.category.strip(),
                         int(snippet.favorite),
+                        json.dumps(
+                            normalize_applications(snippet.applications),
+                            ensure_ascii=False,
+                        ),
                     ),
                 )
                 existing.add(snippet.abbreviation)
@@ -302,4 +323,20 @@ class Storage:
             ),
             category=str(row["category"]),
             favorite=bool(row["favorite"]),
+            applications=Storage._decode_applications(str(row["applications"])),
         )
+
+    @staticmethod
+    def _decode_applications(value: str) -> tuple[str, ...]:
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(decoded, list) or not all(
+            isinstance(item, str) for item in decoded
+        ):
+            return ()
+        try:
+            return normalize_applications(decoded)
+        except ValueError:
+            return ()

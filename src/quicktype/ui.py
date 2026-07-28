@@ -46,9 +46,17 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
-from .models import Snippet, TriggerMode, validate_abbreviation, validate_category
+from .models import (
+    Snippet,
+    TriggerMode,
+    normalize_applications,
+    snippet_applies_to_process,
+    validate_abbreviation,
+    validate_category,
+)
 from .storage import DuplicateAbbreviationError, Storage
 from .template_engine import TemplateIssue, inspect_template, render_template
+from .windows_platform import process_name_from_window
 
 ID_ROLE = Qt.ItemDataRole.UserRole
 HOTKEY_TRANSLATION_KEYS = {
@@ -238,8 +246,14 @@ class QuickAccessDialog(QDialog):
 
     def show_for_window(self, target_window: int) -> None:
         self._target_window = target_window
+        process_name = process_name_from_window(target_window)
         self.snippets = sorted(
-            (snippet for snippet in self.storage.list_snippets() if snippet.enabled),
+            (
+                snippet
+                for snippet in self.storage.list_snippets()
+                if snippet.enabled
+                and snippet_applies_to_process(snippet, process_name)
+            ),
             key=lambda snippet: (
                 not snippet.favorite,
                 -snippet.usage_count,
@@ -288,6 +302,10 @@ class QuickAccessDialog(QDialog):
                     or needle in snippet.abbreviation.casefold()
                     or needle in snippet.category.casefold()
                     or needle in snippet.expansion.casefold()
+                    or any(
+                        needle in application.casefold()
+                        for application in snippet.applications
+                    )
                 )
             )
             self.table.setRowHidden(row, not visible)
@@ -487,15 +505,22 @@ class MainWindow(QMainWindow):
         form.addWidget(self.mode_label, 2, 0)
         form.addWidget(self.mode_combo, 2, 1)
 
+        self.applications_label = QLabel()
+        self.applications_edit = QLineEdit()
+        self.applications_edit.setClearButtonEnabled(True)
+        self.applications_edit.textChanged.connect(self._editor_changed)
+        form.addWidget(self.applications_label, 3, 0)
+        form.addWidget(self.applications_edit, 3, 1)
+
         self.enabled_checkbox = QCheckBox()
         self.enabled_checkbox.toggled.connect(self._editor_changed)
-        form.addWidget(self.enabled_checkbox, 3, 1)
+        form.addWidget(self.enabled_checkbox, 4, 1)
         self.favorite_checkbox = QCheckBox()
         self.favorite_checkbox.toggled.connect(self._editor_changed)
-        form.addWidget(self.favorite_checkbox, 4, 1)
+        form.addWidget(self.favorite_checkbox, 5, 1)
         self.stats_label = QLabel()
         self.stats_label.setProperty("kind", "muted")
-        form.addWidget(self.stats_label, 5, 1)
+        form.addWidget(self.stats_label, 6, 1)
         form.setColumnStretch(1, 1)
         layout.addLayout(form)
 
@@ -567,6 +592,8 @@ class MainWindow(QMainWindow):
         self.abbreviation_label.setText(self.t("abbreviation"))
         self.category_label.setText(self.t("category"))
         self.mode_label.setText(self.t("trigger_mode"))
+        self.applications_label.setText(self.t("applications"))
+        self.applications_edit.setPlaceholderText(self.t("applications_help"))
         current_mode = self.mode_combo.currentData()
         with QSignalBlocker(self.mode_combo):
             self.mode_combo.clear()
@@ -656,6 +683,10 @@ class MainWindow(QMainWindow):
                     needle in snippet.abbreviation.casefold()
                     or needle in snippet.expansion.casefold()
                     or needle in snippet.category.casefold()
+                    or any(
+                        needle in application.casefold()
+                        for application in snippet.applications
+                    )
                 )
             )
             matches_category = (
@@ -732,6 +763,7 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.abbreviation_edit),
                 QSignalBlocker(self.category_combo),
                 QSignalBlocker(self.mode_combo),
+                QSignalBlocker(self.applications_edit),
                 QSignalBlocker(self.enabled_checkbox),
                 QSignalBlocker(self.favorite_checkbox),
                 QSignalBlocker(self.expansion_edit),
@@ -741,6 +773,7 @@ class MainWindow(QMainWindow):
                 self.mode_combo.setCurrentIndex(
                     self.mode_combo.findData(snippet.trigger_mode.value)
                 )
+                self.applications_edit.setText(", ".join(snippet.applications))
                 self.enabled_checkbox.setChecked(snippet.enabled)
                 self.favorite_checkbox.setChecked(snippet.favorite)
                 self.expansion_edit.setPlainText(snippet.expansion)
@@ -763,6 +796,7 @@ class MainWindow(QMainWindow):
             self.abbreviation_edit.clear()
             self.category_combo.setEditText("")
             self.mode_combo.setCurrentIndex(self.mode_combo.findData(TriggerMode.DELIMITER.value))
+            self.applications_edit.clear()
             self.enabled_checkbox.setChecked(True)
             self.favorite_checkbox.setChecked(False)
             self.expansion_edit.clear()
@@ -803,6 +837,20 @@ class MainWindow(QMainWindow):
                 ),
             )
             return False
+        try:
+            applications = normalize_applications(
+                tuple(
+                    item.strip()
+                    for item in self.applications_edit.text().replace(";", ",").split(",")
+                )
+            )
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t("invalid_applications"),
+            )
+            return False
         snippet = Snippet(
             id=self._current_id,
             abbreviation=abbreviation,
@@ -811,6 +859,7 @@ class MainWindow(QMainWindow):
             enabled=self.enabled_checkbox.isChecked(),
             category=category,
             favorite=self.favorite_checkbox.isChecked(),
+            applications=applications,
         )
         try:
             saved = self.storage.save_snippet(snippet)
