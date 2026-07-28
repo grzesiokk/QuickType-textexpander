@@ -68,6 +68,14 @@ def test_quick_access_modifier_rejects_altgr(monkeypatch) -> None:
     )
     assert engine._quick_access_modifier_is_down()
 
+    engine.set_quick_access_hotkey("ctrl_shift_space")
+    monkeypatch.setattr(
+        hook_module,
+        "user32",
+        FakeUser32({hook_module.VK_CONTROL, hook_module.VK_SHIFT}),
+    )
+    assert engine._quick_access_modifier_is_down()
+
     monkeypatch.setattr(
         hook_module,
         "user32",

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
 from .hook import KeyboardHookEngine
+from .hotkeys import normalize_quick_access_hotkey
 from .i18n import Translator
 from .models import Snippet
 from .single_instance import SingleInstance
@@ -41,6 +42,9 @@ class QuickTypeController:
         excluded_processes = self._decode_excluded_processes(
             self.storage.get_setting("excluded_processes", "[]")
         )
+        quick_access_hotkey = normalize_quick_access_hotkey(
+            self.storage.get_setting("quick_access_hotkey")
+        )
         repair_autostart_if_enabled()
         autostart = is_autostart_enabled()
 
@@ -50,6 +54,7 @@ class QuickTypeController:
             on_expansion=self.signals.expanded.emit,
             on_error=self.signals.error.emit,
             on_quick_access=self.signals.quick_access.emit,
+            quick_access_hotkey=quick_access_hotkey,
             excluded_processes=excluded_processes,
         )
         self.window = MainWindow(
@@ -58,8 +63,13 @@ class QuickTypeController:
             engine_active=active,
             autostart=autostart,
             excluded_processes=excluded_processes,
+            quick_access_hotkey=quick_access_hotkey,
         )
-        self.quick_access = QuickAccessDialog(self.storage, self.translator)
+        self.quick_access = QuickAccessDialog(
+            self.storage,
+            self.translator,
+            quick_access_hotkey=quick_access_hotkey,
+        )
         self.tray = TrayController(
             self.translator,
             active=active,
@@ -77,6 +87,9 @@ class QuickTypeController:
         self.window.autostart_change_requested.connect(self.set_autostart_enabled)
         self.window.excluded_processes_change_requested.connect(
             self.set_excluded_processes
+        )
+        self.window.quick_access_hotkey_change_requested.connect(
+            self.set_quick_access_hotkey
         )
         self.window.snippets_changed.connect(self.refresh_snippets)
         self.window.quit_requested.connect(self.quit)
@@ -156,6 +169,13 @@ class QuickTypeController:
         )
         self.engine.set_excluded_processes(normalized)
         self.window.set_excluded_processes(normalized)
+
+    def set_quick_access_hotkey(self, hotkey: str) -> None:
+        normalized = normalize_quick_access_hotkey(hotkey)
+        self.storage.set_setting("quick_access_hotkey", normalized)
+        self.engine.set_quick_access_hotkey(normalized)
+        self.window.set_quick_access_hotkey(normalized)
+        self.quick_access.set_hotkey(normalized)
 
     def _on_expanded(self, snippet: object) -> None:
         abbreviation = getattr(snippet, "abbreviation", "")

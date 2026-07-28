@@ -40,12 +40,23 @@ from PySide6.QtWidgets import (
 
 from .backup import BackupFormatError, export_backup, import_backup
 from .constants import APP_NAME, APP_VERSION, resource_path
+from .hotkeys import (
+    DEFAULT_QUICK_ACCESS_HOTKEY,
+    HOTKEY_SPECS,
+    normalize_quick_access_hotkey,
+)
 from .i18n import Translator
 from .models import Snippet, TriggerMode, validate_abbreviation, validate_category
 from .storage import DuplicateAbbreviationError, Storage
 from .template_engine import TemplateIssue, inspect_template, render_template
 
 ID_ROLE = Qt.ItemDataRole.UserRole
+HOTKEY_TRANSLATION_KEYS = {
+    "ctrl_alt_space": "hotkey_ctrl_alt_space",
+    "ctrl_shift_space": "hotkey_ctrl_shift_space",
+    "alt_shift_space": "hotkey_alt_shift_space",
+    "disabled": "hotkey_disabled",
+}
 
 
 class EngineSignals(QObject):
@@ -64,6 +75,7 @@ class SettingsDialog(QDialog):
         autostart: bool,
         excluded_processes: set[str],
         database_path: Path,
+        quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -86,6 +98,21 @@ class SettingsDialog(QDialog):
         self.autostart_checkbox = QCheckBox(self.t("autostart"))
         self.autostart_checkbox.setChecked(autostart)
         form.addRow("", self.autostart_checkbox)
+
+        self.quick_access_hotkey_combo = QComboBox()
+        for hotkey in HOTKEY_SPECS:
+            self.quick_access_hotkey_combo.addItem(
+                self.t(HOTKEY_TRANSLATION_KEYS[hotkey]),
+                hotkey,
+            )
+        selected_hotkey = normalize_quick_access_hotkey(quick_access_hotkey)
+        self.quick_access_hotkey_combo.setCurrentIndex(
+            max(0, self.quick_access_hotkey_combo.findData(selected_hotkey))
+        )
+        form.addRow(
+            self.t("quick_access_shortcut"),
+            self.quick_access_hotkey_combo,
+        )
 
         self.excluded_label = QLabel(self.t("excluded_apps"))
         self.excluded_edit = QPlainTextEdit()
@@ -132,6 +159,12 @@ class SettingsDialog(QDialog):
             if line.strip()
         }
 
+    @property
+    def selected_quick_access_hotkey(self) -> str:
+        return normalize_quick_access_hotkey(
+            str(self.quick_access_hotkey_combo.currentData())
+        )
+
 
 class QuickAccessDialog(QDialog):
     snippet_chosen = Signal(object, int)
@@ -140,6 +173,7 @@ class QuickAccessDialog(QDialog):
         self,
         storage: Storage,
         translator: Translator,
+        quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -147,6 +181,9 @@ class QuickAccessDialog(QDialog):
         self.t = translator
         self.snippets: list[Snippet] = []
         self._target_window = 0
+        self.quick_access_hotkey = normalize_quick_access_hotkey(
+            quick_access_hotkey
+        )
 
         self.setWindowFlag(Qt.WindowType.Tool, True)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
@@ -188,9 +225,16 @@ class QuickAccessDialog(QDialog):
                 self.t("expansion"),
             ]
         )
-        self.hint_label.setText(self.t("quick_access_hint"))
+        hotkey_label = self.t(
+            HOTKEY_TRANSLATION_KEYS[self.quick_access_hotkey]
+        )
+        self.hint_label.setText(self.t("quick_access_hint", hotkey=hotkey_label))
         if self.snippets:
             self._populate_table()
+
+    def set_hotkey(self, hotkey: str) -> None:
+        self.quick_access_hotkey = normalize_quick_access_hotkey(hotkey)
+        self.retranslate()
 
     def show_for_window(self, target_window: int) -> None:
         self._target_window = target_window
@@ -274,6 +318,7 @@ class MainWindow(QMainWindow):
     active_change_requested = Signal(bool)
     autostart_change_requested = Signal(bool)
     excluded_processes_change_requested = Signal(object)
+    quick_access_hotkey_change_requested = Signal(str)
     snippets_changed = Signal()
     quit_requested = Signal()
 
@@ -285,6 +330,7 @@ class MainWindow(QMainWindow):
         engine_active: bool,
         autostart: bool,
         excluded_processes: set[str] | None = None,
+        quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
     ) -> None:
         super().__init__()
         self.storage = storage
@@ -292,6 +338,9 @@ class MainWindow(QMainWindow):
         self.engine_active = engine_active
         self.autostart = autostart
         self.excluded_processes = set(excluded_processes or set())
+        self.quick_access_hotkey = normalize_quick_access_hotkey(
+            quick_access_hotkey
+        )
         self.snippets: list[Snippet] = []
         self._current_id: int | None = None
         self._is_new = False
@@ -956,6 +1005,7 @@ class MainWindow(QMainWindow):
             autostart=self.autostart,
             excluded_processes=self.excluded_processes,
             database_path=self.storage.path,
+            quick_access_hotkey=self.quick_access_hotkey,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -970,6 +1020,10 @@ class MainWindow(QMainWindow):
             self.excluded_processes_change_requested.emit(
                 dialog.selected_excluded_processes
             )
+        if dialog.selected_quick_access_hotkey != self.quick_access_hotkey:
+            self.quick_access_hotkey_change_requested.emit(
+                dialog.selected_quick_access_hotkey
+            )
 
     def set_engine_active(self, active: bool) -> None:
         self.engine_active = active
@@ -982,6 +1036,9 @@ class MainWindow(QMainWindow):
 
     def set_excluded_processes(self, processes: set[str]) -> None:
         self.excluded_processes = set(processes)
+
+    def set_quick_access_hotkey(self, hotkey: str) -> None:
+        self.quick_access_hotkey = normalize_quick_access_hotkey(hotkey)
 
     def refresh_usage(self, snippet: Snippet) -> None:
         self.snippets = [
