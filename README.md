@@ -1,5 +1,7 @@
 # QuickType
 
+[![Windows build](https://github.com/grzesiokk/textexpander/actions/workflows/windows-build.yml/badge.svg)](https://github.com/grzesiokk/textexpander/actions/workflows/windows-build.yml)
+
 QuickType is a private, portable text expander for 64-bit Windows 11. It runs
 locally, stores its SQLite database beside the executable, and does not require
 Python on the target computer.
@@ -39,6 +41,9 @@ Close QuickType from its tray menu before copying its database.
    expansion text and choose a trigger mode.
 4. Save the snippet and try it in Notepad, Word, a browser, VS Code, or Windows
    Terminal.
+
+Use **Duplicate** / **Duplikuj** or `Ctrl+D` to create an editable copy of the
+selected snippet. Its abbreviation receives a unique `_copy` suffix.
 
 Trigger modes:
 
@@ -90,6 +95,9 @@ to both typed abbreviations and the quick-access picker.
 - Per-snippet application rules are preserved in backups.
 - **Export** creates a human-readable UTF-8 JSON backup containing all snippets
   and their usage statistics.
+- Automatic backups are enabled by default. QuickType writes them after snippet
+  changes to `QuickTypeData\Backups` and keeps the latest 20 copies. This can be
+  disabled in Settings.
 - **Import** can replace the current library or merge a backup while skipping
   abbreviations that already exist.
 - The snippet list shows how many times each abbreviation has expanded. The
@@ -136,6 +144,10 @@ Run tests:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
+
+The [release verification checklist](docs/TESTING.md) covers automated and
+manual Windows 11 checks. The [development status](ROADMAP.md) records the
+completed phases and the deliberately excluded cloud features.
 
 Build the single-file, windowed executable:
 

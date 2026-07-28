@@ -116,3 +116,45 @@ def test_quick_access_filters_enabled_snippets_and_emits_choice(tmp_path: Path) 
     assert chosen == [(work, 12345)]
     dialog.deleteLater()
     application.processEvents()
+
+
+def test_main_window_duplicates_selected_snippet(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(
+            None,
+            "x" * 64,
+            "Copied text",
+            TriggerMode.DELIMITER,
+            enabled=False,
+            category="Work",
+            favorite=True,
+            applications=("Code.exe",),
+        )
+    )
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+
+    window.duplicate_current()
+    snippets = storage.list_snippets()
+
+    assert len(snippets) == 2
+    duplicate = next(snippet for snippet in snippets if snippet.abbreviation != "x" * 64)
+    assert duplicate.abbreviation == ("x" * 59) + "_copy"
+    assert duplicate.expansion == "Copied text"
+    assert duplicate.trigger_mode == TriggerMode.DELIMITER
+    assert not duplicate.enabled
+    assert duplicate.category == "Work"
+    assert duplicate.favorite
+    assert duplicate.applications == ("Code.exe",)
+    assert duplicate.usage_count == 0
+    assert window.abbreviation_edit.text() == duplicate.abbreviation
+
+    window.deleteLater()
+    application.processEvents()

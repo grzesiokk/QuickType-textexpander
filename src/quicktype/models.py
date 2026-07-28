@@ -81,3 +81,15 @@ def snippet_applies_to_process(snippet: Snippet, process_name: str) -> bool:
         return True
     target = process_name.casefold()
     return any(application.casefold() == target for application in snippet.applications)
+
+
+def next_copy_abbreviation(
+    abbreviation: str,
+    existing_abbreviations: set[str],
+) -> str:
+    for number in range(1, 100_000):
+        suffix = "_copy" if number == 1 else f"_copy{number}"
+        candidate = f"{abbreviation[: 64 - len(suffix)]}{suffix}"
+        if candidate not in existing_abbreviations:
+            return candidate
+    raise ValueError("A unique copy abbreviation could not be generated.")
