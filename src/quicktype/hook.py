@@ -200,6 +200,7 @@ kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 class ExpansionTask:
     action: ExpansionAction
     foreground_window: int
+    require_active: bool = True
 
 
 class KeyboardHookEngine:
@@ -209,11 +210,13 @@ class KeyboardHookEngine:
         *,
         on_expansion: Callable[[Snippet], None] | None = None,
         on_error: Callable[[str], None] | None = None,
+        on_quick_access: Callable[[int], None] | None = None,
         excluded_processes: set[str] | None = None,
     ) -> None:
         self.matcher = SnippetMatcher(snippets or [])
         self.on_expansion = on_expansion
         self.on_error = on_error
+        self.on_quick_access = on_quick_access
         self._active = True
         self._active_lock = threading.Lock()
         self._tasks: queue.Queue[ExpansionTask | None] = queue.Queue()
@@ -230,6 +233,7 @@ class KeyboardHookEngine:
             process.casefold() for process in (excluded_processes or set()) if process
         }
         self._suppressed_keyups: set[int] = set()
+        self._quick_access_pressed = False
         self._password_detector = PasswordFieldDetector()
         self._started = threading.Event()
         self._startup_error: str | None = None
@@ -334,6 +338,9 @@ class KeyboardHookEngine:
             if data.flags & LLKHF_INJECTED or data.dwExtraInfo == INJECTED_EVENT_MARKER:
                 return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
             virtual_key = int(data.vkCode)
+            if virtual_key == VK_SPACE and self._quick_access_pressed:
+                self._quick_access_pressed = False
+                return 1
             if virtual_key in self._suppressed_keyups:
                 self._suppressed_keyups.discard(virtual_key)
                 return 1
@@ -344,6 +351,20 @@ class KeyboardHookEngine:
         data = ctypes.cast(data_pointer, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
         if data.flags & LLKHF_INJECTED or data.dwExtraInfo == INJECTED_EVENT_MARKER:
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
+        virtual_key = int(data.vkCode)
+        if (
+            virtual_key == VK_SPACE
+            and self.on_quick_access is not None
+            and self._quick_access_modifier_is_down()
+        ):
+            self.matcher.clear()
+            if not self._quick_access_pressed:
+                self._quick_access_pressed = True
+                foreground = int(user32.GetForegroundWindow() or 0)
+                if not self._is_own_window(foreground):
+                    self.on_quick_access(foreground)
+            return 1
+
         if not self.active:
             self.matcher.clear()
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
@@ -362,7 +383,6 @@ class KeyboardHookEngine:
             self.matcher.clear()
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
 
-        virtual_key = int(data.vkCode)
         if virtual_key == VK_BACK:
             self.matcher.backspace()
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
@@ -417,7 +437,7 @@ class KeyboardHookEngine:
 
     def _perform_expansion(self, task: ExpansionTask) -> None:
         if (
-            not self.active
+            (task.require_active and not self.active)
             or int(user32.GetForegroundWindow() or 0) != task.foreground_window
             or self._password_detector.is_password_field()
         ):
@@ -473,6 +493,33 @@ class KeyboardHookEngine:
         )
         altgr = control and alt and right_alt
         return windows or ((control or alt) and not altgr)
+
+    def _quick_access_modifier_is_down(self) -> bool:
+        control = bool(user32.GetKeyState(VK_CONTROL) & 0x8000)
+        alt = bool(user32.GetKeyState(VK_MENU) & 0x8000)
+        right_alt = bool(user32.GetKeyState(VK_RMENU) & 0x8000)
+        windows = bool(
+            (user32.GetKeyState(VK_LWIN) & 0x8000)
+            or (user32.GetKeyState(VK_RWIN) & 0x8000)
+        )
+        return control and alt and not right_alt and not windows
+
+    def expand_directly(self, snippet: Snippet, foreground_window: int) -> bool:
+        if not foreground_window or self._is_own_window(foreground_window):
+            return False
+        process_name = process_name_from_window(foreground_window).casefold()
+        with self._active_lock:
+            if process_name in self._excluded_processes:
+                return False
+        action = ExpansionAction(snippet=snippet, delete_count=0)
+        self._tasks.put_nowait(
+            ExpansionTask(
+                action=action,
+                foreground_window=foreground_window,
+                require_active=False,
+            )
+        )
+        return True
 
     def _virtual_key_to_character(self, virtual_key: int, scan_code: int) -> str:
         keyboard_state = (ctypes.c_ubyte * 256)()

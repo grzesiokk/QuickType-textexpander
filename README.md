@@ -52,6 +52,14 @@ The interface can be switched between Polish and English in Settings.
 Closing the main window keeps QuickType in the system tray. The tray menu can
 pause expansion, enable autostart, reopen the window, or quit completely.
 
+## Quick access
+
+Press **Ctrl+Alt+Space** in another application to open a searchable list of
+enabled snippets. Search by abbreviation, category, or expansion text, then
+press **Enter** to insert the selected snippet into the original window.
+Template variables and the cursor marker are rendered in the same way as with
+typed abbreviations. **Esc** closes the quick-access window without inserting.
+
 ## Backups, statistics, and exclusions
 
 - Snippets can be organized into categories. Use the category selector above

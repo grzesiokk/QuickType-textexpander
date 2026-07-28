@@ -5,19 +5,27 @@ import json
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QLocale
+from PySide6.QtCore import QLocale, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
 from .hook import KeyboardHookEngine
 from .i18n import Translator
+from .models import Snippet
 from .single_instance import SingleInstance
 from .storage import Storage
-from .ui import EngineSignals, MainWindow, TrayController, apply_application_style
+from .ui import (
+    EngineSignals,
+    MainWindow,
+    QuickAccessDialog,
+    TrayController,
+    apply_application_style,
+)
 from .windows_platform import (
     is_autostart_enabled,
     repair_autostart_if_enabled,
+    restore_foreground_window,
     set_autostart,
 )
 
@@ -41,6 +49,7 @@ class QuickTypeController:
             self.storage.list_snippets(),
             on_expansion=self.signals.expanded.emit,
             on_error=self.signals.error.emit,
+            on_quick_access=self.signals.quick_access.emit,
             excluded_processes=excluded_processes,
         )
         self.window = MainWindow(
@@ -50,6 +59,7 @@ class QuickTypeController:
             autostart=autostart,
             excluded_processes=excluded_processes,
         )
+        self.quick_access = QuickAccessDialog(self.storage, self.translator)
         self.tray = TrayController(
             self.translator,
             active=active,
@@ -72,6 +82,8 @@ class QuickTypeController:
         self.window.quit_requested.connect(self.quit)
         self.signals.expanded.connect(self._on_expanded)
         self.signals.error.connect(self._on_engine_error)
+        self.signals.quick_access.connect(self.quick_access.show_for_window)
+        self.quick_access.snippet_chosen.connect(self._quick_access_chosen)
         self.application.aboutToQuit.connect(self.shutdown)
 
         self.engine.set_active(active)
@@ -106,6 +118,7 @@ class QuickTypeController:
         self.translator.set_language(language)
         self.storage.set_setting("language", language)
         self.window.retranslate()
+        self.quick_access.retranslate()
         self.tray.retranslate()
         self.window.status_message.setText(self.translator("language_restart_not_required"))
 
@@ -157,6 +170,21 @@ class QuickTypeController:
         text = self.translator("engine_error", error=error)
         self.window.status_message.setText(text)
         self.tray.show_error(text)
+
+    def _quick_access_chosen(self, snippet: object, target_window: int) -> None:
+        if not isinstance(snippet, Snippet) or not restore_foreground_window(target_window):
+            self.window.status_message.setText(self.translator("quick_access_target_error"))
+            return
+        QTimer.singleShot(
+            120,
+            lambda: self._insert_quick_access_snippet(snippet, target_window),
+        )
+
+    def _insert_quick_access_snippet(self, snippet: object, target_window: int) -> None:
+        if not isinstance(snippet, Snippet):
+            return
+        if not self.engine.expand_directly(snippet, target_window):
+            self.window.status_message.setText(self.translator("quick_access_target_error"))
 
     def quit(self) -> None:
         if self.window.prepare_quit():
