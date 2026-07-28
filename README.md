@@ -45,6 +45,10 @@ Close QuickType from its tray menu before copying its database.
 Use **Duplicate** / **Duplikuj** or `Ctrl+D` to create an editable copy of the
 selected snippet. Its abbreviation receives a unique `_copy` suffix.
 
+Right-click a snippet to enable or disable it, change its favorite status,
+duplicate it, or delete it. Double-click the star or enabled-state column for a
+quick toggle.
+
 Trigger modes:
 
 - **After delimiter** expands after Space, Tab, Enter, or common punctuation
@@ -98,6 +102,9 @@ to both typed abbreviations and the quick-access picker.
 - Automatic backups are enabled by default. QuickType writes them after snippet
   changes to `QuickTypeData\Backups` and keeps the latest 20 copies. This can be
   disabled in Settings.
+- **Restore** / **Przywróć** shows the available automatic backups with their
+  dates and snippet counts. Before replacing the library, QuickType saves an
+  additional `QuickType-before-restore-*.json` safety copy of the current state.
 - **Import** can replace the current library or merge a backup while skipping
   abbreviations that already exist.
 - The snippet list shows how many times each abbreviation has expanded. The

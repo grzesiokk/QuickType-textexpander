@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .auto_backup import list_automatic_backups
 from .backup import BackupFormatError, export_backup, import_backup
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .hotkeys import (
@@ -55,6 +57,7 @@ from .models import (
     validate_abbreviation,
     validate_category,
 )
+from .recovery import restore_backup
 from .storage import DuplicateAbbreviationError, Storage
 from .template_engine import TemplateIssue, inspect_template, render_template
 from .windows_platform import process_name_from_window
@@ -337,6 +340,86 @@ class QuickAccessDialog(QDialog):
         self.snippet_chosen.emit(snippet, target_window)
 
 
+class BackupRestoreDialog(QDialog):
+    def __init__(
+        self,
+        backup_directory: Path,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.t = translator
+        self.paths = list_automatic_backups(backup_directory)
+        self.setModal(True)
+        self.resize(680, 390)
+        self.setWindowTitle(self.t("restore_backup_title"))
+
+        layout = QVBoxLayout(self)
+        description = QLabel(self.t("restore_backup_description"))
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        self.table.setHorizontalHeaderLabels(
+            [
+                self.t("backup_date_column"),
+                self.t("backup_snippets_column"),
+                self.t("backup_file_column"),
+            ]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self.table.setColumnWidth(0, 155)
+        self.table.setColumnWidth(1, 90)
+        for path in self.paths:
+            try:
+                snippet_count = len(import_backup(path))
+                date_text = datetime.fromtimestamp(path.stat().st_mtime).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            except (OSError, BackupFormatError):
+                continue
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            date_item = QTableWidgetItem(date_text)
+            date_item.setData(ID_ROLE, str(path))
+            self.table.setItem(row, 0, date_item)
+            self.table.setItem(row, 1, QTableWidgetItem(str(snippet_count)))
+            self.table.setItem(row, 2, QTableWidgetItem(path.name))
+        if self.table.rowCount():
+            self.table.selectRow(0)
+        layout.addWidget(self.table, 1)
+
+        self.empty_label = QLabel(self.t("no_automatic_backups"))
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setVisible(self.table.rowCount() == 0)
+        layout.addWidget(self.empty_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.restore_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.restore_button.setText(self.t("restore"))
+        self.restore_button.setEnabled(self.table.rowCount() > 0)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @property
+    def selected_path(self) -> Path | None:
+        selected = self.table.selectedItems()
+        if not selected:
+            return None
+        value = selected[0].data(ID_ROLE)
+        return Path(str(value)) if value else None
+
+
 class MainWindow(QMainWindow):
     language_change_requested = Signal(str)
     active_change_requested = Signal(bool)
@@ -410,6 +493,10 @@ class MainWindow(QMainWindow):
         self.export_action = QAction(self)
         self.export_action.triggered.connect(self.export_snippets)
         toolbar.addAction(self.export_action)
+
+        self.restore_action = QAction(self)
+        self.restore_action.triggered.connect(self.restore_automatic_backup)
+        toolbar.addAction(self.restore_action)
         toolbar.addSeparator()
 
         self.active_action = QAction(self)
@@ -472,6 +559,11 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(4, 115)
         self.table.setColumnWidth(5, 65)
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.table.cellDoubleClicked.connect(self._table_double_clicked)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(
+            self._show_table_context_menu
+        )
         layout.addWidget(self.table, 1)
 
         self.empty_frame = QFrame()
@@ -589,6 +681,7 @@ class MainWindow(QMainWindow):
         self.delete_action.setText(self.t("delete"))
         self.import_action.setText(self.t("import"))
         self.export_action.setText(self.t("export"))
+        self.restore_action.setText(self.t("restore"))
         self.active_action.setText(self.t("engine_active"))
         self.settings_action.setText(self.t("settings"))
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
@@ -919,6 +1012,75 @@ class MainWindow(QMainWindow):
         self.snippets_changed.emit()
         self.status_message.setText(self.t("deleted"))
 
+    def toggle_current_enabled(self) -> None:
+        self._toggle_current_flag("enabled")
+
+    def toggle_current_favorite(self) -> None:
+        self._toggle_current_flag("favorite")
+
+    def _toggle_current_flag(self, field: str) -> None:
+        if not self._maybe_resolve_dirty() or self._current_id is None:
+            return
+        source = next(
+            (entry for entry in self.snippets if entry.id == self._current_id),
+            None,
+        )
+        if source is None:
+            return
+        value = not bool(getattr(source, field))
+        saved = self.storage.save_snippet(replace(source, **{field: value}))
+        self.reload_snippets(select_id=saved.id)
+        self.snippets_changed.emit()
+        self.status_message.setText(
+            self.t(
+                "snippet_enabled" if field == "enabled" and value
+                else "snippet_disabled" if field == "enabled"
+                else "favorite_added" if value
+                else "favorite_removed",
+                abbr=saved.abbreviation,
+            )
+        )
+
+    def _table_double_clicked(self, row: int, column: int) -> None:
+        if column not in (0, 1):
+            return
+        self.table.selectRow(row)
+        if column == 0:
+            self.toggle_current_favorite()
+        else:
+            self.toggle_current_enabled()
+
+    def _show_table_context_menu(self, position: object) -> None:
+        item = self.table.itemAt(position)
+        if item is None:
+            return
+        self.table.selectRow(item.row())
+        source = next(
+            (entry for entry in self.snippets if entry.id == self._current_id),
+            None,
+        )
+        if source is None:
+            return
+        menu = QMenu(self)
+        enabled_action = menu.addAction(
+            self.t("disable_snippet") if source.enabled else self.t("enable_snippet")
+        )
+        favorite_action = menu.addAction(
+            self.t("remove_favorite") if source.favorite else self.t("add_favorite")
+        )
+        menu.addSeparator()
+        duplicate_action = menu.addAction(self.t("duplicate"))
+        delete_action = menu.addAction(self.t("delete"))
+        selected = menu.exec(self.table.viewport().mapToGlobal(position))
+        if selected == enabled_action:
+            self.toggle_current_enabled()
+        elif selected == favorite_action:
+            self.toggle_current_favorite()
+        elif selected == duplicate_action:
+            self.duplicate_current()
+        elif selected == delete_action:
+            self.delete_current()
+
     def duplicate_current(self) -> None:
         if not self._maybe_resolve_dirty() or self._current_id is None:
             return
@@ -1015,6 +1177,46 @@ class MainWindow(QMainWindow):
         self.snippets_changed.emit()
         self.status_message.setText(
             self.t("import_success", added=added, skipped=skipped)
+        )
+
+    def restore_automatic_backup(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        dialog = BackupRestoreDialog(
+            self.storage.path.parent / "Backups",
+            self.t,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        path = dialog.selected_path
+        if path is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            self.t("restore_confirm_title"),
+            self.t("restore_confirm_text", file=path.name),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            count, safety_copy = restore_backup(self.storage, path)
+        except (OSError, ValueError, BackupFormatError) as error:
+            QMessageBox.warning(self, self.t("restore_error_title"), str(error))
+            return
+        self._current_id = None
+        self._is_new = False
+        self._dirty = False
+        self.reload_snippets()
+        self.snippets_changed.emit()
+        self.status_message.setText(
+            self.t(
+                "restore_success",
+                count=count,
+                safety=safety_copy.name,
+            )
         )
 
     def cancel_edit(self) -> None:

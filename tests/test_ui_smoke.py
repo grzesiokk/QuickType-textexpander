@@ -7,10 +7,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
+from quicktype.auto_backup import AutomaticBackupManager
 from quicktype.i18n import Translator
 from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
-from quicktype.ui import MainWindow, QuickAccessDialog, SettingsDialog
+from quicktype.ui import (
+    BackupRestoreDialog,
+    MainWindow,
+    QuickAccessDialog,
+    SettingsDialog,
+)
 
 
 def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path) -> None:
@@ -157,4 +163,56 @@ def test_main_window_duplicates_selected_snippet(tmp_path: Path) -> None:
     assert window.abbreviation_edit.text() == duplicate.abbreviation
 
     window.deleteLater()
+    application.processEvents()
+
+
+def test_main_window_toggles_enabled_and_favorite_state(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    saved = storage.save_snippet(
+        Snippet(None, "sig", "Regards", TriggerMode.DELIMITER)
+    )
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+
+    window.toggle_current_enabled()
+    window.toggle_current_favorite()
+    updated = storage.get_snippet(int(saved.id))
+
+    assert updated is not None
+    assert not updated.enabled
+    assert updated.favorite
+    assert window.table.item(0, 0).text() == "★"
+    assert window.table.item(0, 1).text() == "○"
+
+    window.deleteLater()
+    application.processEvents()
+
+
+def test_backup_restore_dialog_lists_newest_automatic_backup(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "QuickTypeData" / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(None, "sig", "Regards", TriggerMode.DELIMITER)
+    )
+    manager = AutomaticBackupManager(storage)
+    backup = manager.create_if_changed()
+    assert backup is not None
+
+    dialog = BackupRestoreDialog(manager.directory, Translator("en"))
+
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 1).text() == "1"
+    assert dialog.selected_path == backup
+    assert dialog.restore_button.isEnabled()
+
+    dialog.deleteLater()
     application.processEvents()

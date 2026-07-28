@@ -15,7 +15,10 @@ All phases planned for the local Windows 11 edition are complete.
   application-specific snippets, duplication, JSON import, and JSON export.
 - **Quick access:** configurable global picker for inserting enabled snippets.
 - **Reliability:** transactional SQLite storage, schema migrations, atomic JSON
-  backups, and rotating automatic backups.
+  backups, rotating automatic backups, an in-app recovery browser, and a safety
+  copy created before every restore.
+- **Fast library actions:** context-menu and double-click controls for enabling,
+  disabling, and changing favorite status without opening the full editor.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 
