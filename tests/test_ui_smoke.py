@@ -25,17 +25,20 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
             TriggerMode.DELIMITER,
             True,
             category="Work",
+            favorite=True,
         )
     )
     translator = Translator("pl")
     window = MainWindow(storage, translator, engine_active=True, autostart=False)
 
     assert window.table.rowCount() == 1
-    assert window.table.columnCount() == 5
-    assert window.table.item(0, 2).text() == "Work"
-    assert window.table.item(0, 4).text() == "0"
+    assert window.table.columnCount() == 6
+    assert window.table.item(0, 0).text() == "★"
+    assert window.table.item(0, 3).text() == "Work"
+    assert window.table.item(0, 5).text() == "0"
     assert window.abbreviation_edit.text() == ";sig"
     assert window.category_combo.currentText() == "Work"
+    assert window.favorite_checkbox.isChecked()
     assert window.mode_combo.currentData() == TriggerMode.DELIMITER.value
     assert window.category_filter.findData("Work") >= 0
 
@@ -75,6 +78,16 @@ def test_quick_access_filters_enabled_snippets_and_emits_choice(tmp_path: Path) 
             "hello@example.com",
             TriggerMode.DELIMITER,
             category="Work",
+            favorite=True,
+        )
+    )
+    storage.save_snippet(
+        Snippet(
+            None,
+            ";often",
+            "Frequently used",
+            TriggerMode.IMMEDIATE,
+            usage_count=10,
         )
     )
     storage.save_snippet(
@@ -85,8 +98,10 @@ def test_quick_access_filters_enabled_snippets_and_emits_choice(tmp_path: Path) 
     dialog.snippet_chosen.connect(lambda snippet, target: chosen.append((snippet, target)))
 
     dialog.show_for_window(12345)
-    assert dialog.table.rowCount() == 1
-    assert dialog.table.item(0, 0).text() == ";mail"
+    assert dialog.table.rowCount() == 2
+    assert dialog.table.item(0, 0).text() == "★"
+    assert dialog.table.item(0, 1).text() == ";mail"
+    assert dialog.table.item(1, 1).text() == ";often"
     dialog.apply_filter("work")
     assert not dialog.table.isRowHidden(0)
     dialog.choose_current()
