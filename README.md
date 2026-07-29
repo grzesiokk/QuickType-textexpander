@@ -49,6 +49,11 @@ Right-click a snippet to enable or disable it, change its favorite status,
 duplicate it, or delete it. Double-click the star or enabled-state column for a
 quick toggle.
 
+Click a list-column header to sort the library by favorite status, enabled
+state, abbreviation, category, trigger mode, or numeric usage count. The label
+above the table shows how many snippets match the current search and category
+filters.
+
 Use **Categories** / **Kategorie** to see how many snippets belong to each
 category, rename a category across the whole library, or remove the category
 assignment without deleting its snippets.
@@ -109,6 +114,8 @@ to both typed abbreviations and the quick-access picker.
 - Per-snippet application rules are preserved in backups.
 - **Export** creates a human-readable UTF-8 JSON backup containing all snippets
   and their usage statistics.
+- Use the arrow beside **Export** and choose **Export visible** to save only the
+  snippets shown by the current search and category filters.
 - Automatic backups are enabled by default. QuickType writes them after snippet
   changes to `QuickTypeData\Backups` and keeps the latest 20 copies. This can be
   disabled in Settings.

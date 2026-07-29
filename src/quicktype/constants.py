@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "QuickType"
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.11.0"
 DATA_DIR_NAME = "QuickTypeData"
 DATABASE_NAME = "quicktype.sqlite3"
 AUTOSTART_VALUE_NAME = "QuickType"

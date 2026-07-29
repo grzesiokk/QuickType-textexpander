@@ -6,9 +6,11 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from quicktype.auto_backup import AutomaticBackupManager
+from quicktype.backup import import_backup
 from quicktype.i18n import Translator
 from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
@@ -294,4 +296,77 @@ def test_statistics_dialog_shows_total_and_ranking(tmp_path: Path) -> None:
     assert dialog.reset_all_button.isEnabled()
 
     dialog.deleteLater()
+    application.processEvents()
+
+
+def test_main_window_sorts_counts_and_exports_visible_snippets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(
+            None,
+            "alpha",
+            "First",
+            TriggerMode.IMMEDIATE,
+            usage_count=2,
+            category="Work",
+        )
+    )
+    storage.save_snippet(
+        Snippet(
+            None,
+            "beta",
+            "Second",
+            TriggerMode.IMMEDIATE,
+            usage_count=10,
+            category="Home",
+        )
+    )
+    storage.save_snippet(
+        Snippet(
+            None,
+            "gamma",
+            "Third",
+            TriggerMode.IMMEDIATE,
+            usage_count=1,
+            category="Work",
+        )
+    )
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+
+    assert window.filter_count_label.text() == "Visible: 3 of 3"
+    window.table.sortItems(5, Qt.SortOrder.DescendingOrder)
+    assert window.table.item(0, 2).text() == "beta"
+    assert window.table.item(1, 2).text() == "alpha"
+    assert window.table.item(2, 2).text() == "gamma"
+
+    window.category_filter.setCurrentIndex(
+        window.category_filter.findData("Work")
+    )
+    assert window.filter_count_label.text() == "Visible: 2 of 3"
+    assert {
+        snippet.abbreviation for snippet in window.filtered_snippets()
+    } == {"alpha", "gamma"}
+
+    destination = tmp_path / "visible.json"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(destination), ""),
+    )
+    window.export_filtered_snippets()
+    assert {
+        snippet.abbreviation for snippet in import_backup(destination)
+    } == {"alpha", "gamma"}
+
+    window.deleteLater()
     application.processEvents()
