@@ -146,9 +146,13 @@ to both typed abbreviations and the quick-access picker.
 - Automatic backups are enabled by default. QuickType writes them after snippet
   changes to `QuickTypeData\Backups` and keeps the latest 20 copies. This can be
   disabled in Settings.
-- **Restore** / **Przywróć** shows the available automatic backups with their
-  dates and snippet counts. Before replacing the library, QuickType saves an
-  additional `QuickType-before-restore-*.json` safety copy of the current state.
+- **Backups** / **Kopie** opens a unified browser for automatic and manual
+  backups, safety copies created before imports and restores, and other valid
+  QuickType JSON backups stored in `QuickTypeData\Backups`.
+- The browser shows each backup's type, date, snippet count, and file name. Use
+  the type filter to narrow the list. Invalid or damaged JSON files are ignored.
+- Before restoring any listed backup, QuickType saves an additional
+  `QuickType-before-restore-*.json` safety copy of the current state.
 - **Import** first shows how many snippets are new and lists every abbreviation
   that conflicts with the current library. The conflict table compares the
   current expansion with the expansion stored in the backup.

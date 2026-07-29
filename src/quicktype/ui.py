@@ -50,8 +50,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .auto_backup import list_automatic_backups
-from .backup import BackupFormatError, export_backup, import_backup
+from .backup import BackupFormatError, export_backup
+from .backup_catalog import BackupKind, list_backup_entries
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .hotkeys import (
     CLIPBOARD_CAPTURE_HOTKEY_SPECS,
@@ -88,6 +88,7 @@ from .template_engine import TemplateIssue, inspect_template, render_template
 from .windows_platform import process_name_from_window
 
 ID_ROLE = Qt.ItemDataRole.UserRole
+BACKUP_KIND_ROLE = Qt.ItemDataRole.UserRole + 1
 HOTKEY_TRANSLATION_KEYS = {
     "ctrl_alt_space": "hotkey_ctrl_alt_space",
     "ctrl_shift_space": "hotkey_ctrl_shift_space",
@@ -417,9 +418,9 @@ class BackupRestoreDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.t = translator
-        self.paths = list_automatic_backups(backup_directory)
+        self.entries = list_backup_entries(backup_directory)
         self.setModal(True)
-        self.resize(680, 390)
+        self.resize(820, 440)
         self.setWindowTitle(self.t("restore_backup_title"))
 
         layout = QVBoxLayout(self)
@@ -427,7 +428,23 @@ class BackupRestoreDialog(QDialog):
         description.setWordWrap(True)
         layout.addWidget(description)
 
-        self.table = QTableWidget(0, 3)
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel(self.t("backup_type_filter")))
+        self.type_filter = QComboBox()
+        self.type_filter.addItem(self.t("backup_type_all"), None)
+        for kind in BackupKind:
+            self.type_filter.addItem(
+                self.t(f"backup_type_{kind.value}"),
+                kind.value,
+            )
+        self.type_filter.currentIndexChanged.connect(
+            self.apply_type_filter
+        )
+        filters.addWidget(self.type_filter)
+        filters.addStretch(1)
+        layout.addLayout(filters)
+
+        self.table = QTableWidget(0, 4)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -435,35 +452,48 @@ class BackupRestoreDialog(QDialog):
         self.table.setHorizontalHeaderLabels(
             [
                 self.t("backup_date_column"),
+                self.t("backup_type_column"),
                 self.t("backup_snippets_column"),
                 self.t("backup_file_column"),
             ]
         )
         self.table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
+            3, QHeaderView.ResizeMode.Stretch
         )
         self.table.setColumnWidth(0, 155)
-        self.table.setColumnWidth(1, 90)
-        for path in self.paths:
-            try:
-                snippet_count = len(import_backup(path))
-                date_text = datetime.fromtimestamp(path.stat().st_mtime).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            except (OSError, BackupFormatError):
-                continue
+        self.table.setColumnWidth(1, 145)
+        self.table.setColumnWidth(2, 90)
+        for entry in self.entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            date_item = QTableWidgetItem(date_text)
-            date_item.setData(ID_ROLE, str(path))
+            date_item = QTableWidgetItem(
+                entry.modified_at.strftime("%Y-%m-%d %H:%M:%S")
+            )
+            date_item.setData(ID_ROLE, str(entry.path))
+            date_item.setData(BACKUP_KIND_ROLE, entry.kind.value)
             self.table.setItem(row, 0, date_item)
-            self.table.setItem(row, 1, QTableWidgetItem(str(snippet_count)))
-            self.table.setItem(row, 2, QTableWidgetItem(path.name))
+            self.table.setItem(
+                row,
+                1,
+                QTableWidgetItem(
+                    self.t(f"backup_type_{entry.kind.value}")
+                ),
+            )
+            self.table.setItem(
+                row,
+                2,
+                QTableWidgetItem(str(entry.snippet_count)),
+            )
+            self.table.setItem(
+                row,
+                3,
+                QTableWidgetItem(entry.path.name),
+            )
         if self.table.rowCount():
             self.table.selectRow(0)
         layout.addWidget(self.table, 1)
 
-        self.empty_label = QLabel(self.t("no_automatic_backups"))
+        self.empty_label = QLabel(self.t("no_backups"))
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setVisible(self.table.rowCount() == 0)
         layout.addWidget(self.empty_label)
@@ -474,7 +504,8 @@ class BackupRestoreDialog(QDialog):
         )
         self.restore_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.restore_button.setText(self.t("restore"))
-        self.restore_button.setEnabled(self.table.rowCount() > 0)
+        self.table.itemSelectionChanged.connect(self._update_selection)
+        self._update_selection()
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -486,6 +517,24 @@ class BackupRestoreDialog(QDialog):
             return None
         value = selected[0].data(ID_ROLE)
         return Path(str(value)) if value else None
+
+    def apply_type_filter(self) -> None:
+        selected_kind = self.type_filter.currentData()
+        first_visible: int | None = None
+        for row in range(self.table.rowCount()):
+            kind = self.table.item(row, 0).data(BACKUP_KIND_ROLE)
+            visible = selected_kind is None or kind == selected_kind
+            self.table.setRowHidden(row, not visible)
+            if visible and first_visible is None:
+                first_visible = row
+        self.table.clearSelection()
+        if first_visible is not None:
+            self.table.selectRow(first_visible)
+        self.empty_label.setVisible(first_visible is None)
+        self._update_selection()
+
+    def _update_selection(self) -> None:
+        self.restore_button.setEnabled(self.selected_path is not None)
 
 
 class ImportPreviewDialog(QDialog):
@@ -1350,7 +1399,7 @@ class MainWindow(QMainWindow):
         self.import_action.setText(self.t("import"))
         self.export_action.setText(self.t("export"))
         self.export_filtered_action.setText(self.t("export_filtered"))
-        self.restore_action.setText(self.t("restore"))
+        self.restore_action.setText(self.t("backups"))
         self.data_action.setText(self.t("data_maintenance"))
         self.categories_action.setText(self.t("manage_categories"))
         self.statistics_action.setText(self.t("statistics"))
