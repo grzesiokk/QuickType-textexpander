@@ -1,6 +1,6 @@
 # QuickType
 
-[![Windows build](https://github.com/grzesiokk/textexpander/actions/workflows/windows-build.yml/badge.svg)](https://github.com/grzesiokk/textexpander/actions/workflows/windows-build.yml)
+[![Windows build](https://github.com/grzesiokk/QuickType-textexpander/actions/workflows/windows-build.yml/badge.svg)](https://github.com/grzesiokk/QuickType-textexpander/actions/workflows/windows-build.yml)
 
 QuickType is a private, portable text expander for 64-bit Windows 11. It runs
 locally, stores its SQLite database beside the executable, and does not require
@@ -12,10 +12,10 @@ Python on the target computer.
 
 ## Ready-to-use application
 
-**[Download the latest QuickType.exe](https://github.com/grzesiokk/textexpander/releases/latest/download/QuickType.exe)**
+**[Download the latest QuickType.exe](https://github.com/grzesiokk/QuickType-textexpander/releases/latest/download/QuickType.exe)**
 
 Prebuilt Windows binaries are published under
-[GitHub Releases](https://github.com/grzesiokk/textexpander/releases). The
+[GitHub Releases](https://github.com/grzesiokk/QuickType-textexpander/releases). The
 `dist` directory is intentionally not committed to Git. When building the
 project locally, the resulting application is created at:
 
