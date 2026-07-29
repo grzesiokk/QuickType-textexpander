@@ -28,14 +28,53 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[build,test]"
+          python -m pip install -e ".[build,test,quality]"
 
-      - name: Run tests
-        run: python -m pytest
+      - name: Prepare report directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force build | Out-Null
+
+      - name: Lint
+        run: ruff check src tests scripts
+
+      - name: Check core types
+        run: >-
+          mypy
+          src/quicktype/models.py
+          src/quicktype/storage.py
+          src/quicktype/backup.py
+          src/quicktype/backup_catalog.py
+          src/quicktype/auto_backup.py
+          src/quicktype/matcher.py
+          src/quicktype/diagnostics.py
+          src/quicktype/importing.py
+          src/quicktype/recovery.py
+          src/quicktype/maintenance.py
+
+      - name: Run tests with coverage
+        run: >-
+          python -m pytest
+          --cov=quicktype
+          --cov-report=term
+          --cov-report=xml:build/coverage.xml
+          --cov-fail-under=72
+
+      - name: Audit dependencies and create SBOM
+        run: >-
+          pip-audit
+          --local
+          --skip-editable
+          --progress-spinner off
+          --format cyclonedx-json
+          --output build/QuickType-sbom.json
 
       - name: Build QuickType.exe
         shell: pwsh
-        run: .\build.ps1
+        run: .\build.ps1 -SkipInstall
+
+      - name: Smoke test portable executable
+        shell: pwsh
+        run: .\scripts\smoke_exe.ps1
 
       - name: Show executable checksum
         shell: pwsh
@@ -46,5 +85,15 @@ jobs:
         with:
           name: QuickType-Windows-${{ github.sha }}
           path: dist/QuickType.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload quality reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: QuickType-quality-${{ github.sha }}
+          path: |
+            build/coverage.xml
+            build/QuickType-sbom.json
           if-no-files-found: error
           retention-days: 14

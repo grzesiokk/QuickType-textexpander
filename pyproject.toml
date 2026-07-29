@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quicktype-windows"
-version = "1.20.0"
+version = "1.25.0"
 description = "Private, portable text expander for Windows 11"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,7 +16,12 @@ dependencies = [
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.11,<7"]
-test = ["pytest>=8.3,<9", "pytest-cov>=6,<7"]
+test = ["pytest>=9.0.3,<10", "pytest-cov>=6,<8"]
+quality = [
+    "mypy>=1.14,<2",
+    "pip-audit>=2.7,<3",
+    "ruff>=0.9,<1",
+]
 
 [project.scripts]
 quicktype = "quicktype.__main__:main"
@@ -33,3 +38,16 @@ quicktype = ["resources/*.svg"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true

@@ -102,6 +102,10 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid abbreviation.")
     if not isinstance(expansion, str):
         raise BackupFormatError(f"Snippet #{index + 1} has invalid expansion text.")
+    if not isinstance(trigger_mode, str):
+        raise BackupFormatError(
+            f"Snippet #{index + 1} has an invalid trigger mode."
+        )
     try:
         mode = TriggerMode(trigger_mode)
     except (TypeError, ValueError) as error:

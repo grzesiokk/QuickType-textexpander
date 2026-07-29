@@ -144,8 +144,8 @@ to both typed abbreviations and the quick-access picker.
 - Use the arrow beside **Export** and choose **Export visible** to save only the
   snippets shown by the current search and category filters.
 - Automatic backups are enabled by default. QuickType writes them after snippet
-  changes to `QuickTypeData\Backups` and keeps the latest 20 copies. This can be
-  disabled in Settings.
+  changes to `QuickTypeData\Backups`. Settings can disable them or retain
+  between 1 and 200 automatic copies.
 - **Backups** / **Kopie** opens a unified browser for automatic and manual
   backups, safety copies created before imports and restores, and other valid
   QuickType JSON backups stored in `QuickTypeData\Backups`.
@@ -162,6 +162,9 @@ to both typed abbreviations and the quick-access picker.
   and permanently delete a selected backup after explicit confirmation.
 - Before restoring any listed backup, QuickType saves an additional
   `QuickType-before-restore-*.json` safety copy of the current state.
+- If SQLite is damaged or fails its startup integrity check, QuickType offers
+  to restore the newest valid JSON backup. The damaged database and sidecar
+  files are quarantined instead of overwritten.
 - **Import** first shows how many snippets are new and lists every abbreviation
   that conflicts with the current library. The conflict table compares the
   current expansion with the expansion stored in the backup.
@@ -173,6 +176,10 @@ to both typed abbreviations and the quick-access picker.
   `QuickTypeData\Backups`.
 - The snippet list shows how many times each abbreviation has expanded. The
   editor also shows the most recent use.
+- Select multiple rows with Ctrl or Shift and use **Bulk** to enable, disable,
+  favorite, recategorize, export, or delete selected snippets transactionally.
+- Light, dark, and high-contrast themes are available in Settings. QuickType
+  remembers the main-window geometry, column widths, and panel split.
 - The statistics window excludes never-used snippets from the ranking while
   still including them in the library total.
 - Settings contains an excluded-applications list. Enter one executable name
@@ -186,6 +193,9 @@ path. From the same window you can:
 
 - create a timestamped `QuickType-manual-*.json` backup immediately;
 - run SQLite's integrity check without modifying the database;
+- copy a privacy-safe diagnostic report containing health and counts but no
+  abbreviations, expansion text, clipboard data, typed characters, categories,
+  or application lists;
 - open `QuickTypeData` directly in Windows Explorer.
 
 ## Safety and Windows limitations
@@ -213,7 +223,7 @@ Create a virtual environment and install dependencies:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[build,test]"
+.\.venv\Scripts\python.exe -m pip install -e ".[build,test,quality]"
 ```
 
 Run from source:
@@ -228,9 +238,23 @@ Run tests:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+Run all local quality gates:
+
+```powershell
+.\.venv\Scripts\ruff.exe check src tests scripts
+.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+.\.venv\Scripts\python.exe -m pytest --cov=quicktype --cov-fail-under=72
+.\.venv\Scripts\pip-audit.exe --local --skip-editable
+```
+
 The [release verification checklist](docs/TESTING.md) covers automated and
 manual Windows 11 checks. The [development status](ROADMAP.md) records the
 completed phases and the deliberately excluded cloud features.
+
+Tagged versions are tested, audited, smoke-tested, and published automatically
+with `QuickType.exe`, `SHA256SUMS`, and a CycloneDX SBOM. See the
+[compatibility record](docs/COMPATIBILITY.md) for automated coverage and the
+target-application inventory.
 
 Build the single-file, windowed executable:
 

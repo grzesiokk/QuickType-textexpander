@@ -8,14 +8,24 @@ Run the complete test suite:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+Run the same quality gates used by CI:
+
+```powershell
+.\.venv\Scripts\ruff.exe check src tests scripts
+.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+.\.venv\Scripts\python.exe -m pytest --cov=quicktype --cov-report=term --cov-fail-under=72
+.\.venv\Scripts\pip-audit.exe --local --skip-editable --progress-spinner off
+```
+
 Build the portable executable:
 
 ```powershell
 .\build.ps1 -SkipInstall
 ```
 
-GitHub Actions repeats both operations on a clean Windows runner and publishes
-`QuickType.exe` as a workflow artifact for 14 days.
+GitHub Actions repeats the quality gates and build on a clean Windows runner
+and publishes the executable, coverage, and SBOM artifacts for 14 days. Tagged
+builds additionally publish a GitHub Release with `SHA256SUMS`.
 
 ## Manual Windows 11 checklist
 
@@ -32,6 +42,7 @@ Before publishing a release:
    autostart.
 7. Edit, duplicate, delete, and export snippets. Verify the right-click actions
    and double-click toggles in the snippet list.
+   Select multiple rows with Ctrl and Shift, then verify every Bulk action.
 8. Import a backup containing both new and conflicting abbreviations. Verify the
    preview counts and side-by-side current/imported expansions. Test merge,
    update-conflicts, and full replace modes; confirm unrelated local snippets
@@ -55,7 +66,7 @@ Before publishing a release:
 14. Open Statistics, verify the ranking and dates, then reset one counter and
    all remaining counters after their confirmation prompts.
 15. Open Data maintenance, create a manual backup, run the database integrity
-   check, and open the data folder in Windows Explorer.
+   check, copy the privacy-safe diagnostic report, and open the data folder.
 16. Open Backups and verify automatic, manual, before-import, and
    before-restore entries show the correct type, date, file name, and snippet
    count. Filter every type and verify that selecting a backup shows accurate
@@ -65,9 +76,15 @@ Before publishing a release:
    the clipboard. Refresh the catalog, open its folder, and delete a disposable
    backup after confirmation. Restore a safety copy and verify the previous
    state is saved as a new `QuickType-before-restore-*.json`.
-17. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
-   backup files.
+17. Confirm the default retention of 20 automatic backups. Change retention to
+   3 and 30 and confirm pruning and persistence.
 18. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
 19. Close QuickType from the tray and start it again to confirm data
     persistence.
+20. Switch between light, dark, and high-contrast themes. Resize the window,
+    columns, and panel split, restart, and verify the restored layout. Complete
+    the main workflow using only the keyboard.
+21. On disposable data, corrupt a copy of `quicktype.sqlite3`, start QuickType,
+    accept recovery, and verify that the newest valid JSON backup is restored
+    while the damaged database is preserved under a `*-corrupt-*` name.

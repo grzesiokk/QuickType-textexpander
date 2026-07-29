@@ -9,8 +9,8 @@ from quicktype.hook import (
     INJECTED_EVENT_MARKER,
     KEYEVENTF_KEYUP,
     KEYEVENTF_UNICODE,
-    KeyboardHookEngine,
     VK_RETURN,
+    KeyboardHookEngine,
     _text_inputs,
 )
 from quicktype.models import Snippet, TriggerMode

@@ -10,6 +10,8 @@ from quicktype.models import Snippet, TriggerMode
 from quicktype.recovery import (
     RestoreChangeKind,
     analyze_restore,
+    latest_recovery_backup,
+    recover_database,
     restore_backup,
 )
 from quicktype.storage import Storage
@@ -141,3 +143,49 @@ def test_invalid_restore_does_not_change_data_or_write_safety_copy(
     assert storage.list_snippets()[0].abbreviation == "current"
     backup_directory = storage.path.parent / "Backups"
     assert not backup_directory.exists()
+
+
+def test_corrupt_database_is_quarantined_and_restored_from_latest_backup(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "QuickTypeData" / "quicktype.sqlite3"
+    backup_directory = database.parent / "Backups"
+    older = backup_directory / "QuickType-manual-20260729-120000-000001.json"
+    newer = backup_directory / "QuickType-manual-20260729-120100-000001.json"
+    export_backup(
+        older,
+        [Snippet(None, "older", "Old", TriggerMode.IMMEDIATE)],
+    )
+    export_backup(
+        newer,
+        [Snippet(None, "newer", "New", TriggerMode.IMMEDIATE)],
+    )
+    older.touch()
+    newer.touch()
+    database.write_bytes(b"not a sqlite database")
+
+    source = latest_recovery_backup(database)
+    result = recover_database(database, source)
+
+    assert source == newer
+    assert result.restored_count == 1
+    assert result.quarantined_database is not None
+    assert result.quarantined_database.read_bytes() == b"not a sqlite database"
+    restored = Storage(database)
+    restored.initialize()
+    assert restored.list_snippets()[0].abbreviation == "newer"
+
+
+def test_invalid_recovery_backup_leaves_corrupt_database_in_place(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "QuickTypeData" / "quicktype.sqlite3"
+    database.parent.mkdir(parents=True)
+    database.write_bytes(b"corrupt")
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("not json", encoding="utf-8")
+
+    with pytest.raises(BackupFormatError):
+        recover_database(database, invalid)
+
+    assert database.read_bytes() == b"corrupt"

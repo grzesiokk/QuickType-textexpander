@@ -2,7 +2,6 @@ from datetime import datetime
 
 from quicktype.template_engine import inspect_template, render_template
 
-
 NOW = datetime(2026, 7, 28, 14, 5, 9)
 
 

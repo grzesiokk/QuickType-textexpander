@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -9,8 +10,11 @@ from PySide6.QtCore import QLocale, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
+from .auto_backup import (
+    AutomaticBackupManager,
+    normalize_backup_retention,
+)
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
-from .auto_backup import AutomaticBackupManager
 from .hook import KeyboardHookEngine
 from .hotkeys import (
     normalize_clipboard_capture_hotkey,
@@ -18,6 +22,7 @@ from .hotkeys import (
 )
 from .i18n import Translator
 from .models import Snippet
+from .recovery import latest_recovery_backup, recover_database
 from .single_instance import SingleInstance
 from .storage import Storage
 from .ui import (
@@ -26,6 +31,7 @@ from .ui import (
     QuickAccessDialog,
     TrayController,
     apply_application_style,
+    normalize_theme,
 )
 from .windows_platform import (
     is_autostart_enabled,
@@ -55,7 +61,17 @@ class QuickTypeController:
         repair_autostart_if_enabled()
         autostart = is_autostart_enabled()
         automatic_backups = self.storage.get_setting("automatic_backups", "1") != "0"
-        self.backups = AutomaticBackupManager(self.storage)
+        backup_retention = normalize_backup_retention(
+            self.storage.get_setting("backup_retention", "20")
+        )
+        theme = normalize_theme(
+            self.storage.get_setting("theme", "light")
+        )
+        apply_application_style(self.application, theme)
+        self.backups = AutomaticBackupManager(
+            self.storage,
+            retention=backup_retention,
+        )
 
         self.signals = EngineSignals()
         self.engine = KeyboardHookEngine(
@@ -74,6 +90,8 @@ class QuickTypeController:
             engine_active=active,
             autostart=autostart,
             automatic_backups=automatic_backups,
+            backup_retention=backup_retention,
+            theme=theme,
             excluded_processes=excluded_processes,
             quick_access_hotkey=quick_access_hotkey,
             clipboard_capture_hotkey=clipboard_capture_hotkey,
@@ -102,6 +120,10 @@ class QuickTypeController:
         self.window.automatic_backups_change_requested.connect(
             self.set_automatic_backups
         )
+        self.window.backup_retention_change_requested.connect(
+            self.set_backup_retention
+        )
+        self.window.theme_change_requested.connect(self.set_theme)
         self.window.excluded_processes_change_requested.connect(
             self.set_excluded_processes
         )
@@ -194,6 +216,18 @@ class QuickTypeController:
         self.window.set_automatic_backups(enabled)
         if enabled:
             self._create_automatic_backup()
+
+    def set_backup_retention(self, retention: int) -> None:
+        normalized = normalize_backup_retention(retention)
+        self.storage.set_setting("backup_retention", str(normalized))
+        self.backups.set_retention(normalized)
+        self.window.set_backup_retention(normalized)
+
+    def set_theme(self, theme: str) -> None:
+        normalized = normalize_theme(theme)
+        self.storage.set_setting("theme", normalized)
+        apply_application_style(self.application, normalized)
+        self.window.set_theme(normalized)
 
     def _create_automatic_backup(
         self,
@@ -291,6 +325,14 @@ def run(argv: list[str] | None = None) -> int:
         QMessageBox.critical(None, APP_NAME, "Windows system tray is unavailable.")
         return 1
 
+    startup_translator = Translator(
+        "pl"
+        if QLocale.system().language() == QLocale.Language.Polish
+        else "en"
+    )
+    if not _prepare_database(startup_translator):
+        return 1
+
     try:
         controller = QuickTypeController(application, start_minimized=options.minimized)
     except Exception as error:
@@ -305,3 +347,56 @@ def run(argv: list[str] | None = None) -> int:
     # Keep the Python controller alive for the entire Qt event loop.
     application.quicktype_controller = controller  # type: ignore[attr-defined]
     return application.exec()
+
+
+def _prepare_database(translator: Translator) -> bool:
+    path = database_path()
+    storage = Storage(path)
+    try:
+        storage.initialize()
+        valid, _details = storage.check_integrity()
+    except (OSError, sqlite3.Error):
+        valid = False
+    if valid:
+        return True
+
+    source = latest_recovery_backup(path)
+    if source is not None:
+        message = translator(
+            "startup_recovery_text",
+            file=source.name,
+        )
+    else:
+        message = translator("startup_recovery_empty_text")
+    answer = QMessageBox.question(
+        None,
+        translator("startup_recovery_title"),
+        message,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.Yes,
+    )
+    if answer != QMessageBox.StandardButton.Yes:
+        return False
+    try:
+        result = recover_database(path, source)
+    except (OSError, sqlite3.Error, ValueError) as error:
+        QMessageBox.critical(
+            None,
+            translator("startup_recovery_failed_title"),
+            translator("startup_recovery_failed_text", error=str(error)),
+        )
+        return False
+    QMessageBox.information(
+        None,
+        translator("startup_recovery_complete_title"),
+        translator(
+            "startup_recovery_complete_text",
+            count=result.restored_count,
+            preserved=(
+                result.quarantined_database.name
+                if result.quarantined_database is not None
+                else "—"
+            ),
+        ),
+    )
+    return True
