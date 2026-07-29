@@ -3,10 +3,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from quicktype.backup import export_backup
 from quicktype.backup_catalog import (
     BackupKind,
     classify_backup,
+    delete_backup_file,
     list_backup_entries,
 )
 from quicktype.models import Snippet, TriggerMode
@@ -67,3 +70,25 @@ def test_catalog_lists_valid_backups_newest_first_and_skips_invalid(
         BackupKind.MANUAL,
     ]
     assert all(entry.snippet_count == 1 for entry in entries)
+
+
+def test_backup_deletion_is_limited_to_json_files_in_catalog_directory(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "Backups"
+    selected = directory / "QuickType-manual-20260729-120000-000001.json"
+    outside = tmp_path / "outside.json"
+    other_file = directory / "notes.txt"
+    _export(selected, "selected")
+    _export(outside, "outside")
+    other_file.write_text("keep", encoding="utf-8")
+
+    delete_backup_file(directory, selected)
+
+    assert not selected.exists()
+    with pytest.raises(ValueError):
+        delete_backup_file(directory, outside)
+    with pytest.raises(ValueError):
+        delete_backup_file(directory, other_file)
+    assert outside.exists()
+    assert other_file.exists()

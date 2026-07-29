@@ -79,3 +79,11 @@ def list_backup_entries(directory: Path) -> list[BackupEntry]:
         ),
         reverse=True,
     )
+
+
+def delete_backup_file(directory: Path, path: Path) -> None:
+    location = Path(directory).resolve()
+    target = Path(path).resolve()
+    if target.parent != location or target.suffix.casefold() != ".json":
+        raise ValueError("The selected file is outside the backup directory.")
+    target.unlink()

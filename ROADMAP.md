@@ -21,6 +21,10 @@ All phases planned for the local Windows 11 edition are complete.
   before-import, before-restore, and other valid local QuickType backups.
 - **Safe restore preview:** read-only added, changed, removed, and unchanged
   counts in the backup browser and final restore confirmation.
+- **Backup inspection and management:** per-snippet restore differences,
+  changed-field details, action filters, clipboard reports, catalog refresh,
+  direct folder access, and confirmed deletion constrained to the backup
+  directory.
 - **Safe import:** preflight snippet and conflict counts, an exact conflict
   list, explicit merge, update, or replace modes, and a safety copy before
   every import.
