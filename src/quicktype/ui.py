@@ -82,7 +82,7 @@ from .models import (
     validate_abbreviation,
     validate_category,
 )
-from .recovery import restore_backup
+from .recovery import RestoreAnalysis, analyze_restore, restore_backup
 from .storage import DuplicateAbbreviationError, Storage
 from .template_engine import TemplateIssue, inspect_template, render_template
 from .windows_platform import process_name_from_window
@@ -412,15 +412,18 @@ class QuickAccessDialog(QDialog):
 class BackupRestoreDialog(QDialog):
     def __init__(
         self,
-        backup_directory: Path,
+        storage: Storage,
         translator: Translator,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.t = translator
-        self.entries = list_backup_entries(backup_directory)
+        self.storage = storage
+        self.entries = list_backup_entries(storage.path.parent / "Backups")
+        self._analysis_cache: dict[Path, RestoreAnalysis] = {}
+        self._selected_analysis: RestoreAnalysis | None = None
         self.setModal(True)
-        self.resize(820, 440)
+        self.resize(820, 475)
         self.setWindowTitle(self.t("restore_backup_title"))
 
         layout = QVBoxLayout(self)
@@ -498,6 +501,11 @@ class BackupRestoreDialog(QDialog):
         self.empty_label.setVisible(self.table.rowCount() == 0)
         layout.addWidget(self.empty_label)
 
+        self.impact_label = QLabel()
+        self.impact_label.setWordWrap(True)
+        self.impact_label.setProperty("kind", "muted")
+        layout.addWidget(self.impact_label)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
@@ -518,6 +526,10 @@ class BackupRestoreDialog(QDialog):
         value = selected[0].data(ID_ROLE)
         return Path(str(value)) if value else None
 
+    @property
+    def selected_analysis(self) -> RestoreAnalysis | None:
+        return self._selected_analysis
+
     def apply_type_filter(self) -> None:
         selected_kind = self.type_filter.currentData()
         first_visible: int | None = None
@@ -534,7 +546,39 @@ class BackupRestoreDialog(QDialog):
         self._update_selection()
 
     def _update_selection(self) -> None:
-        self.restore_button.setEnabled(self.selected_path is not None)
+        path = self.selected_path
+        self._selected_analysis = None
+        if path is None:
+            self.impact_label.clear()
+            self.restore_button.setEnabled(False)
+            return
+        try:
+            analysis = self._analysis_cache.get(path)
+            if analysis is None:
+                analysis = analyze_restore(self.storage, path)
+                self._analysis_cache[path] = analysis
+        except (OSError, ValueError, BackupFormatError):
+            self.impact_label.setText(self.t("restore_analysis_error"))
+            self._set_impact_kind("error")
+            self.restore_button.setEnabled(False)
+            return
+        self._selected_analysis = analysis
+        self.impact_label.setText(
+            self.t(
+                "restore_impact",
+                added=analysis.added,
+                updated=analysis.updated,
+                removed=analysis.removed,
+                unchanged=analysis.unchanged,
+            )
+        )
+        self._set_impact_kind("warning" if analysis.removed else "muted")
+        self.restore_button.setEnabled(True)
+
+    def _set_impact_kind(self, kind: str) -> None:
+        self.impact_label.setProperty("kind", kind)
+        self.impact_label.style().unpolish(self.impact_label)
+        self.impact_label.style().polish(self.impact_label)
 
 
 class ImportPreviewDialog(QDialog):
@@ -2002,19 +2046,27 @@ class MainWindow(QMainWindow):
         if not self._maybe_resolve_dirty():
             return
         dialog = BackupRestoreDialog(
-            self.storage.path.parent / "Backups",
+            self.storage,
             self.t,
             self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         path = dialog.selected_path
-        if path is None:
+        analysis = dialog.selected_analysis
+        if path is None or analysis is None:
             return
         answer = QMessageBox.question(
             self,
             self.t("restore_confirm_title"),
-            self.t("restore_confirm_text", file=path.name),
+            self.t(
+                "restore_confirm_text_detailed",
+                file=path.name,
+                added=analysis.added,
+                updated=analysis.updated,
+                removed=analysis.removed,
+                unchanged=analysis.unchanged,
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

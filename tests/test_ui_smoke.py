@@ -262,16 +262,19 @@ def test_backup_restore_dialog_lists_and_filters_all_backup_types(
     before_restore = manager.directory / (
         "QuickType-before-restore-20260729-120002-000001.json"
     )
-    for path in (manual, before_import, before_restore):
+    for path in (manual, before_restore):
         export_backup(path, storage.list_snippets())
+    export_backup(
+        before_import,
+        [
+            Snippet(None, "sig", "Changed regards", TriggerMode.DELIMITER),
+            Snippet(None, "new", "New text", TriggerMode.IMMEDIATE),
+        ],
+    )
 
-    dialog = BackupRestoreDialog(manager.directory, Translator("en"))
+    dialog = BackupRestoreDialog(storage, Translator("en"))
 
     assert dialog.table.rowCount() == 4
-    assert all(
-        dialog.table.item(row, 2).text() == "1"
-        for row in range(dialog.table.rowCount())
-    )
     assert dialog.restore_button.isEnabled()
     dialog.type_filter.setCurrentIndex(
         dialog.type_filter.findData(BackupKind.BEFORE_IMPORT.value)
@@ -283,7 +286,16 @@ def test_backup_restore_dialog_lists_and_filters_all_backup_types(
     ]
     assert len(visible_rows) == 1
     assert dialog.table.item(visible_rows[0], 1).text() == "Before import"
+    assert dialog.table.item(visible_rows[0], 2).text() == "2"
     assert dialog.selected_path == before_import
+    assert dialog.selected_analysis is not None
+    assert dialog.selected_analysis.added == 1
+    assert dialog.selected_analysis.updated == 1
+    assert dialog.selected_analysis.removed == 0
+    assert dialog.selected_analysis.unchanged == 0
+    assert dialog.impact_label.text() == (
+        "Added: 1 · changed: 1 · removed: 0 · unchanged: 0"
+    )
 
     dialog.deleteLater()
     application.processEvents()

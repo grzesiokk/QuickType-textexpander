@@ -19,6 +19,8 @@ All phases planned for the local Windows 11 edition are complete.
   copy created before every restore.
 - **Backup catalog:** one filtered recovery browser for automatic, manual,
   before-import, before-restore, and other valid local QuickType backups.
+- **Safe restore preview:** read-only added, changed, removed, and unchanged
+  counts in the backup browser and final restore confirmation.
 - **Safe import:** preflight snippet and conflict counts, an exact conflict
   list, explicit merge, update, or replace modes, and a safety copy before
   every import.
