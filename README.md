@@ -10,6 +10,10 @@ Python on the target computer.
 
 ![QuickType running on Windows 11](docs/quicktype-screenshot.png)
 
+The screenshot shows QuickType 1.25.0 with searchable snippets, categories,
+usage statistics, application rules, bulk actions, backup tools, and a live
+preview of dynamic variables.
+
 ## Ready-to-use application
 
 **[Download the latest QuickType.exe](https://github.com/grzesiokk/QuickType-textexpander/releases/latest/download/QuickType.exe)**
