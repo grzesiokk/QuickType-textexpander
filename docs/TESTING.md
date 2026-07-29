@@ -40,20 +40,24 @@ Before publishing a release:
 9. Sort each list column, especially usage values such as 2 and 10. Combine
    search and category filters, verify the visible count, then export only the
    visible snippets and import that file into a separate test library.
-10. Verify `Ctrl+F`, clear search and category filters with `Esc`, then copy a
+10. Copy multiline text containing Polish characters. Create a snippet from the
+   New-button menu, `Ctrl+Shift+N`, and the tray action; confirm the expansion
+   is prefilled, remains unsaved until an abbreviation is entered, and an empty
+   clipboard does not replace the current edit.
+11. Verify `Ctrl+F`, clear search and category filters with `Esc`, then copy a
    rendered preview containing date, clipboard, and cursor variables with
    `Ctrl+Shift+C` and the context-menu action.
-11. Rename and remove a category in the category manager. Confirm that all
+12. Rename and remove a category in the category manager. Confirm that all
    affected snippets remain present and that the category filters refresh.
-12. Open Statistics, verify the ranking and dates, then reset one counter and
+13. Open Statistics, verify the ranking and dates, then reset one counter and
    all remaining counters after their confirmation prompts.
-13. Open Data maintenance, create a manual backup, run the database integrity
+14. Open Data maintenance, create a manual backup, run the database integrity
    check, and open the data folder in Windows Explorer.
-14. Restore an automatic backup and confirm that the previous state is saved as
+15. Restore an automatic backup and confirm that the previous state is saved as
    `QuickType-before-restore-*.json`.
-15. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+16. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
-16. Confirm that expansion does not run in QuickType's editor or a recognized
+17. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
-17. Close QuickType from the tray and start it again to confirm data
+18. Close QuickType from the tray and start it again to confirm data
     persistence.

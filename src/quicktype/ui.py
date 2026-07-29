@@ -1030,7 +1030,26 @@ class MainWindow(QMainWindow):
         self.new_action = QAction(self)
         self.new_action.setShortcut(QKeySequence.StandardKey.New)
         self.new_action.triggered.connect(self.new_snippet)
-        toolbar.addAction(self.new_action)
+        self.new_from_clipboard_action = QAction(self)
+        self.new_from_clipboard_action.setShortcut(
+            QKeySequence("Ctrl+Shift+N")
+        )
+        self.new_from_clipboard_action.triggered.connect(
+            self.new_snippet_from_clipboard
+        )
+        self.new_menu = QMenu(self)
+        self.new_menu.addAction(self.new_action)
+        self.new_menu.addAction(self.new_from_clipboard_action)
+        self.new_button = QToolButton()
+        self.new_button.setDefaultAction(self.new_action)
+        self.new_button.setMenu(self.new_menu)
+        self.new_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        )
+        self.new_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        toolbar.addWidget(self.new_button)
 
         self.duplicate_action = QAction(self)
         self.duplicate_action.setShortcut(QKeySequence("Ctrl+D"))
@@ -1278,6 +1297,9 @@ class MainWindow(QMainWindow):
     def retranslate(self) -> None:
         self.setWindowTitle(self.t("app_title"))
         self.new_action.setText(self.t("new"))
+        self.new_from_clipboard_action.setText(
+            self.t("new_from_clipboard")
+        )
         self.duplicate_action.setText(self.t("duplicate"))
         self.delete_action.setText(self.t("delete"))
         self.import_action.setText(self.t("import"))
@@ -1538,8 +1560,24 @@ class MainWindow(QMainWindow):
             self._selection_guard = False
 
     def new_snippet(self) -> None:
-        if not self._maybe_resolve_dirty():
+        self._begin_new_snippet("")
+
+    def new_snippet_from_clipboard(self) -> None:
+        clipboard_text = QApplication.clipboard().text()
+        if not clipboard_text:
+            self.status_message.setText(self.t("clipboard_has_no_text"))
             return
+        if self._begin_new_snippet(clipboard_text):
+            self.status_message.setText(
+                self.t(
+                    "clipboard_snippet_ready",
+                    count=len(clipboard_text),
+                )
+            )
+
+    def _begin_new_snippet(self, expansion: str) -> bool:
+        if not self._maybe_resolve_dirty():
+            return False
         self._selection_guard = True
         try:
             self.table.clearSelection()
@@ -1552,12 +1590,13 @@ class MainWindow(QMainWindow):
             self.applications_edit.clear()
             self.enabled_checkbox.setChecked(True)
             self.favorite_checkbox.setChecked(False)
-            self.expansion_edit.clear()
-            self._dirty = False
+            self.expansion_edit.setPlainText(expansion)
+            self._dirty = bool(expansion)
             self.abbreviation_edit.setFocus()
             self.update_preview()
         finally:
             self._selection_guard = False
+        return True
 
     def save_current(self) -> bool:
         if not self._is_new and self._current_id is None:
@@ -2152,6 +2191,7 @@ class TrayController:
         *,
         active: bool,
         on_open: Callable[[], None],
+        on_new_from_clipboard: Callable[[], None],
         on_active: Callable[[bool], None],
         on_autostart: Callable[[bool], None],
         on_quit: Callable[[], None],
@@ -2161,6 +2201,7 @@ class TrayController:
         self.active = active
         self.autostart = autostart
         self.on_open = on_open
+        self.on_new_from_clipboard = on_new_from_clipboard
         self.on_active = on_active
         self.on_autostart = on_autostart
         self.on_quit = on_quit
@@ -2169,6 +2210,12 @@ class TrayController:
         self.open_action = QAction()
         self.open_action.triggered.connect(on_open)
         self.menu.addAction(self.open_action)
+        self.new_from_clipboard_action = QAction()
+        self.new_from_clipboard_action.triggered.connect(
+            on_new_from_clipboard
+        )
+        self.menu.addAction(self.new_from_clipboard_action)
+        self.menu.addSeparator()
         self.active_action = QAction()
         self.active_action.setCheckable(True)
         self.active_action.setChecked(active)
@@ -2197,6 +2244,9 @@ class TrayController:
 
     def retranslate(self) -> None:
         self.open_action.setText(self.t("open"))
+        self.new_from_clipboard_action.setText(
+            self.t("new_from_clipboard")
+        )
         self.active_action.setText(self.t("engine_active"))
         self.autostart_action.setText(self.t("autostart"))
         self.quit_action.setText(self.t("quit"))

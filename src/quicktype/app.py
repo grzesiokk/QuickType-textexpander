@@ -78,6 +78,7 @@ class QuickTypeController:
             self.translator,
             active=active,
             on_open=self.window.show_and_activate,
+            on_new_from_clipboard=self.new_snippet_from_clipboard,
             on_active=self.set_active,
             on_autostart=self.set_autostart_enabled,
             on_quit=self.quit,
@@ -143,6 +144,10 @@ class QuickTypeController:
         self.quick_access.retranslate()
         self.tray.retranslate()
         self.window.status_message.setText(self.translator("language_restart_not_required"))
+
+    def new_snippet_from_clipboard(self) -> None:
+        self.window.show_and_activate()
+        self.window.new_snippet_from_clipboard()
 
     def set_active(self, active: bool) -> None:
         self.engine.set_active(active)
