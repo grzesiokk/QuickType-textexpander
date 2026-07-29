@@ -58,7 +58,9 @@ Before publishing a release:
    check, and open the data folder in Windows Explorer.
 16. Open Backups and verify automatic, manual, before-import, and
    before-restore entries show the correct type, date, file name, and snippet
-   count. Filter every type, restore a safety copy, and confirm the previous
+   count. Filter every type and verify that selecting a backup shows accurate
+   added, changed, removed, and unchanged counts. Confirm that the same impact
+   appears in the final prompt, restore a safety copy, and verify the previous
    state is saved as a new `QuickType-before-restore-*.json`.
 17. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.

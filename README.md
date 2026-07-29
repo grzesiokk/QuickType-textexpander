@@ -151,6 +151,9 @@ to both typed abbreviations and the quick-access picker.
   QuickType JSON backups stored in `QuickTypeData\Backups`.
 - The browser shows each backup's type, date, snippet count, and file name. Use
   the type filter to narrow the list. Invalid or damaged JSON files are ignored.
+- Selecting a backup shows a read-only restore impact summary: snippets that
+  will be added, changed, removed, or left unchanged. The same counts are
+  repeated in the final confirmation before any data is modified.
 - Before restoring any listed backup, QuickType saves an additional
   `QuickType-before-restore-*.json` safety copy of the current state.
 - **Import** first shows how many snippets are new and lists every abbreviation
