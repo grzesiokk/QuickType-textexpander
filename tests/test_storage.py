@@ -82,6 +82,48 @@ def test_category_is_normalized_and_persisted(storage: Storage) -> None:
     assert storage.list_snippets()[0].category == "Kontakt"
 
 
+def test_categories_can_be_listed_renamed_and_cleared(storage: Storage) -> None:
+    storage.save_snippet(
+        Snippet(None, "one", "1", TriggerMode.IMMEDIATE, category="Work")
+    )
+    storage.save_snippet(
+        Snippet(None, "two", "2", TriggerMode.IMMEDIATE, category="Work")
+    )
+    storage.save_snippet(
+        Snippet(None, "three", "3", TriggerMode.IMMEDIATE, category="Home")
+    )
+    storage.save_snippet(
+        Snippet(None, "none", "4", TriggerMode.IMMEDIATE)
+    )
+
+    assert storage.list_categories() == [("Home", 1), ("Work", 2)]
+    assert storage.rename_category("Work", "Projects") == 2
+    assert storage.list_categories() == [("Home", 1), ("Projects", 2)]
+    assert storage.clear_category("Home") == 1
+    assert storage.list_categories() == [("Projects", 2)]
+    categories = {
+        snippet.abbreviation: snippet.category
+        for snippet in storage.list_snippets()
+    }
+    assert categories == {
+        "none": "",
+        "one": "Projects",
+        "three": "",
+        "two": "Projects",
+    }
+
+
+def test_category_rename_validates_target(storage: Storage) -> None:
+    storage.save_snippet(
+        Snippet(None, "one", "1", TriggerMode.IMMEDIATE, category="Work")
+    )
+    with pytest.raises(ValueError):
+        storage.rename_category("Work", "")
+    with pytest.raises(ValueError):
+        storage.rename_category("Work", "x" * 65)
+    assert storage.list_categories() == [("Work", 1)]
+
+
 def test_import_can_merge_or_replace(storage: Storage) -> None:
     storage.save_snippet(Snippet(None, "keep", "Old", TriggerMode.DELIMITER))
     incoming = [

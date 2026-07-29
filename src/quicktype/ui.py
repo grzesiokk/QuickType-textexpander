@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHeaderView,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -420,6 +421,138 @@ class BackupRestoreDialog(QDialog):
         return Path(str(value)) if value else None
 
 
+class CategoryManagerDialog(QDialog):
+    def __init__(
+        self,
+        storage: Storage,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.storage = storage
+        self.t = translator
+        self.changed = False
+        self.setModal(True)
+        self.resize(520, 390)
+        self.setWindowTitle(self.t("manage_categories"))
+
+        layout = QVBoxLayout(self)
+        description = QLabel(self.t("manage_categories_description"))
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        self.table.setHorizontalHeaderLabels(
+            [self.t("category_column"), self.t("backup_snippets_column")]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.table.setColumnWidth(1, 100)
+        self.table.itemSelectionChanged.connect(self._update_buttons)
+        self.table.itemDoubleClicked.connect(lambda _item: self.rename_selected())
+        layout.addWidget(self.table, 1)
+
+        actions = QHBoxLayout()
+        self.rename_button = QPushButton(self.t("rename_category"))
+        self.rename_button.clicked.connect(self.rename_selected)
+        actions.addWidget(self.rename_button)
+        self.clear_button = QPushButton(self.t("clear_category"))
+        self.clear_button.clicked.connect(self.clear_selected)
+        actions.addWidget(self.clear_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.reload_categories()
+
+    @property
+    def selected_category(self) -> str | None:
+        selected = self.table.selectedItems()
+        if not selected:
+            return None
+        value = selected[0].data(ID_ROLE)
+        return str(value) if value else None
+
+    def reload_categories(self, *, select: str | None = None) -> None:
+        categories = self.storage.list_categories()
+        self.table.setRowCount(0)
+        for category, count in categories:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            category_item = QTableWidgetItem(category)
+            category_item.setData(ID_ROLE, category)
+            self.table.setItem(row, 0, category_item)
+            self.table.setItem(row, 1, QTableWidgetItem(str(count)))
+            if select == category:
+                self.table.selectRow(row)
+        if self.table.rowCount() and not self.table.selectedItems():
+            self.table.selectRow(0)
+        self._update_buttons()
+
+    def rename_selected(self) -> None:
+        category = self.selected_category
+        if category is None:
+            return
+        replacement, accepted = QInputDialog.getText(
+            self,
+            self.t("rename_category"),
+            self.t("new_category_name"),
+            text=category,
+        )
+        if not accepted:
+            return
+        replacement = replacement.strip()
+        issues = validate_category(replacement)
+        if not replacement or issues:
+            message_key = (
+                "required_category"
+                if not replacement
+                else "long_category"
+                if issues[0].code == "too_long"
+                else "control_category"
+            )
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t(message_key),
+            )
+            return
+        changed = self.storage.rename_category(category, replacement)
+        if changed:
+            self.changed = True
+            self.reload_categories(select=replacement)
+
+    def clear_selected(self) -> None:
+        category = self.selected_category
+        if category is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            self.t("clear_category_title"),
+            self.t("clear_category_text", category=category),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        changed = self.storage.clear_category(category)
+        if changed:
+            self.changed = True
+            self.reload_categories()
+
+    def _update_buttons(self) -> None:
+        selected = self.selected_category is not None
+        self.rename_button.setEnabled(selected)
+        self.clear_button.setEnabled(selected)
+
+
 class MainWindow(QMainWindow):
     language_change_requested = Signal(str)
     active_change_requested = Signal(bool)
@@ -497,6 +630,10 @@ class MainWindow(QMainWindow):
         self.restore_action = QAction(self)
         self.restore_action.triggered.connect(self.restore_automatic_backup)
         toolbar.addAction(self.restore_action)
+
+        self.categories_action = QAction(self)
+        self.categories_action.triggered.connect(self.open_category_manager)
+        toolbar.addAction(self.categories_action)
         toolbar.addSeparator()
 
         self.active_action = QAction(self)
@@ -682,6 +819,7 @@ class MainWindow(QMainWindow):
         self.import_action.setText(self.t("import"))
         self.export_action.setText(self.t("export"))
         self.restore_action.setText(self.t("restore"))
+        self.categories_action.setText(self.t("manage_categories"))
         self.active_action.setText(self.t("engine_active"))
         self.settings_action.setText(self.t("settings"))
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
@@ -1218,6 +1356,20 @@ class MainWindow(QMainWindow):
                 safety=safety_copy.name,
             )
         )
+
+    def open_category_manager(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        dialog = CategoryManagerDialog(self.storage, self.t, self)
+        dialog.exec()
+        if not dialog.changed:
+            return
+        self._current_id = None
+        self._is_new = False
+        self._dirty = False
+        self.reload_snippets()
+        self.snippets_changed.emit()
+        self.status_message.setText(self.t("categories_updated"))
 
     def cancel_edit(self) -> None:
         if self._current_id is not None:

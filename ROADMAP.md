@@ -19,6 +19,8 @@ All phases planned for the local Windows 11 edition are complete.
   copy created before every restore.
 - **Fast library actions:** context-menu and double-click controls for enabling,
   disabling, and changing favorite status without opening the full editor.
+- **Category management:** category counts, transactional bulk rename, and safe
+  removal of category assignments without deleting snippets.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 

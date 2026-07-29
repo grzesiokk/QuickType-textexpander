@@ -49,6 +49,10 @@ Right-click a snippet to enable or disable it, change its favorite status,
 duplicate it, or delete it. Double-click the star or enabled-state column for a
 quick toggle.
 
+Use **Categories** / **Kategorie** to see how many snippets belong to each
+category, rename a category across the whole library, or remove the category
+assignment without deleting its snippets.
+
 Trigger modes:
 
 - **After delimiter** expands after Space, Tab, Enter, or common punctuation
@@ -95,6 +99,8 @@ to both typed abbreviations and the quick-access picker.
 
 - Snippets can be organized into categories. Use the category selector above
   the list to filter the library; category names are preserved in backups.
+- Category changes are applied transactionally to every affected snippet and
+  trigger the same automatic backup protection as ordinary edits.
 - Favorite status is shown with a star and is also preserved in backups.
 - Per-snippet application rules are preserved in backups.
 - **Export** creates a human-readable UTF-8 JSON backup containing all snippets
