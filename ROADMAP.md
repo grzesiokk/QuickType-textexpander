@@ -34,6 +34,8 @@ All phases planned for the local Windows 11 edition are complete.
   size and backup counts, and direct access to the portable data folder.
 - **Keyboard and clipboard workflow:** search focus and filter-clearing
   shortcuts plus rendered-copy actions for the editor and snippet context menu.
+- **Clipboard capture:** create an unsaved multiline Unicode snippet directly
+  from the toolbar, `Ctrl+Shift+N`, or the system-tray menu.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 

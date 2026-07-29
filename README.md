@@ -45,6 +45,11 @@ Close QuickType from its tray menu before copying its database.
 Use **Duplicate** / **Duplikuj** or `Ctrl+D` to create an editable copy of the
 selected snippet. Its abbreviation receives a unique `_copy` suffix.
 
+Copy any text, then choose **New from clipboard** / **Nowy ze schowka** from
+the arrow beside **New**, press `Ctrl+Shift+N`, or use the tray-menu action.
+QuickType opens a new unsaved snippet with the clipboard text already placed
+in its expansion. Enter an abbreviation and save it normally.
+
 Right-click a snippet to enable or disable it, change its favorite status,
 duplicate it, or delete it. Double-click the star or enabled-state column for a
 quick toggle.
@@ -100,6 +105,8 @@ The global shortcut can be changed immediately in Settings to
 
 - `Ctrl+F` focuses the snippet search and selects its current query.
 - `Esc` clears both the search query and category filter.
+- `Ctrl+N` starts an empty snippet; `Ctrl+Shift+N` starts one from clipboard.
+- `Ctrl+S` saves the current snippet.
 - `Ctrl+Shift+C` copies the editor's rendered preview.
 - **Copy result** / **Kopiuj wynik** is also available below the preview and in
   the snippet context menu.

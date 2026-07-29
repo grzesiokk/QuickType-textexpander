@@ -24,6 +24,7 @@ from quicktype.ui import (
     QuickAccessDialog,
     SettingsDialog,
     StatisticsDialog,
+    TrayController,
 )
 
 
@@ -484,4 +485,69 @@ def test_keyboard_filter_helpers_and_rendered_copy(tmp_path: Path) -> None:
 
     window.close()
     window.deleteLater()
+    application.processEvents()
+
+
+def test_new_snippet_from_clipboard_preserves_multiline_unicode(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+    assert window.new_button.defaultAction() is window.new_action
+    assert (
+        window.new_from_clipboard_action.shortcut().toString()
+        == "Ctrl+Shift+N"
+    )
+    clipboard_text = "Zażółć gęślą jaźń\nSecond line"
+    QApplication.clipboard().setText(clipboard_text)
+
+    window.new_snippet_from_clipboard()
+
+    assert window._is_new
+    assert window._dirty
+    assert window.expansion_edit.toPlainText() == clipboard_text
+    assert f"Loaded {len(clipboard_text)} characters" in window.status_message.text()
+    window.abbreviation_edit.setText(";clip")
+    assert window.save_current()
+    saved = storage.list_snippets()
+    assert len(saved) == 1
+    assert saved[0].abbreviation == ";clip"
+    assert saved[0].expansion == clipboard_text
+
+    QApplication.clipboard().clear()
+    window.new_snippet_from_clipboard()
+    assert window.expansion_edit.toPlainText() == clipboard_text
+    assert window.status_message.text() == "The clipboard does not contain text."
+
+    window.deleteLater()
+    application.processEvents()
+
+
+def test_tray_exposes_new_from_clipboard_action() -> None:
+    application = QApplication.instance() or QApplication([])
+    events: list[str] = []
+    tray = TrayController(
+        Translator("en"),
+        active=True,
+        on_open=lambda: events.append("open"),
+        on_new_from_clipboard=lambda: events.append("clipboard"),
+        on_active=lambda active: events.append(f"active:{active}"),
+        on_autostart=lambda enabled: events.append(f"autostart:{enabled}"),
+        on_quit=lambda: events.append("quit"),
+        autostart=False,
+    )
+
+    assert tray.new_from_clipboard_action.text() == "New from clipboard"
+    tray.new_from_clipboard_action.trigger()
+    assert events == ["clipboard"]
+
+    tray.tray.hide()
+    tray.tray.deleteLater()
     application.processEvents()
