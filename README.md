@@ -134,8 +134,12 @@ to both typed abbreviations and the quick-access picker.
 - **Restore** / **Przywróć** shows the available automatic backups with their
   dates and snippet counts. Before replacing the library, QuickType saves an
   additional `QuickType-before-restore-*.json` safety copy of the current state.
-- **Import** can replace the current library or merge a backup while skipping
-  abbreviations that already exist.
+- **Import** first shows how many snippets are new and lists every abbreviation
+  that conflicts with the current library. Choose **Merge** to add only new
+  snippets or **Replace** to replace the full library.
+- Before either import mode changes data, QuickType writes a timestamped
+  `QuickType-before-import-*.json` safety copy of the current library to
+  `QuickTypeData\Backups`.
 - The snippet list shows how many times each abbreviation has expanded. The
   editor also shows the most recent use.
 - The statistics window excludes never-used snippets from the ranking while

@@ -17,6 +17,8 @@ All phases planned for the local Windows 11 edition are complete.
 - **Reliability:** transactional SQLite storage, schema migrations, atomic JSON
   backups, rotating automatic backups, an in-app recovery browser, and a safety
   copy created before every restore.
+- **Safe import:** preflight snippet and conflict counts, an exact conflict
+  list, explicit merge or replace modes, and a safety copy before every import.
 - **Fast library actions:** context-menu and double-click controls for enabling,
   disabling, and changing favorite status without opening the full editor.
 - **Category management:** category counts, transactional bulk rename, and safe
