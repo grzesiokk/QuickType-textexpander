@@ -96,6 +96,18 @@ Other snippets are ordered by their usage count.
 The global shortcut can be changed immediately in Settings to
 **Ctrl+Shift+Space**, **Alt+Shift+Space**, or disabled completely.
 
+## Keyboard and clipboard workflow
+
+- `Ctrl+F` focuses the snippet search and selects its current query.
+- `Esc` clears both the search query and category filter.
+- `Ctrl+Shift+C` copies the editor's rendered preview.
+- **Copy result** / **Kopiuj wynik** is also available below the preview and in
+  the snippet context menu.
+
+Copied results render date, time, clipboard, and cursor variables in the same
+way as expansion. `{{cursor}}` is removed because the clipboard contains plain
+text and has no cursor position.
+
 ## Application-specific snippets
 
 Enter executable names such as `Code.exe`, `WINWORD.EXE`, or `chrome.exe` in a

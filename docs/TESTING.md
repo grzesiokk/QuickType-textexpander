@@ -35,17 +35,20 @@ Before publishing a release:
 8. Sort each list column, especially usage values such as 2 and 10. Combine
    search and category filters, verify the visible count, then export only the
    visible snippets and import that file into a separate test library.
-9. Rename and remove a category in the category manager. Confirm that all
+9. Verify `Ctrl+F`, clear search and category filters with `Esc`, then copy a
+   rendered preview containing date, clipboard, and cursor variables with
+   `Ctrl+Shift+C` and the context-menu action.
+10. Rename and remove a category in the category manager. Confirm that all
    affected snippets remain present and that the category filters refresh.
-10. Open Statistics, verify the ranking and dates, then reset one counter and
+11. Open Statistics, verify the ranking and dates, then reset one counter and
    all remaining counters after their confirmation prompts.
-11. Open Data maintenance, create a manual backup, run the database integrity
+12. Open Data maintenance, create a manual backup, run the database integrity
    check, and open the data folder in Windows Explorer.
-12. Restore an automatic backup and confirm that the previous state is saved as
+13. Restore an automatic backup and confirm that the previous state is saved as
    `QuickType-before-restore-*.json`.
-13. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+14. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
-14. Confirm that expansion does not run in QuickType's editor or a recognized
+15. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
-15. Close QuickType from the tray and start it again to confirm data
+16. Close QuickType from the tray and start it again to confirm data
     persistence.
