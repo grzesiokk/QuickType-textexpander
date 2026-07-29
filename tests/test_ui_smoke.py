@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,6 +18,7 @@ from quicktype.ui import (
     MainWindow,
     QuickAccessDialog,
     SettingsDialog,
+    StatisticsDialog,
 )
 
 
@@ -243,6 +245,53 @@ def test_category_manager_lists_category_counts(tmp_path: Path) -> None:
     assert dialog.selected_category == "Home"
     assert dialog.rename_button.isEnabled()
     assert dialog.clear_button.isEnabled()
+
+    dialog.deleteLater()
+    application.processEvents()
+
+
+def test_statistics_dialog_shows_total_and_ranking(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(
+            None,
+            "often",
+            "Often",
+            TriggerMode.IMMEDIATE,
+            usage_count=7,
+            last_used_at=datetime(2026, 7, 29, 10, 30),
+            category="Work",
+        )
+    )
+    storage.save_snippet(
+        Snippet(
+            None,
+            "sometimes",
+            "Sometimes",
+            TriggerMode.IMMEDIATE,
+            usage_count=2,
+            last_used_at=datetime(2026, 7, 28, 8, 0),
+        )
+    )
+    storage.save_snippet(
+        Snippet(None, "never", "Never", TriggerMode.IMMEDIATE)
+    )
+
+    dialog = StatisticsDialog(storage, Translator("en"))
+
+    assert dialog.summary_label.text() == (
+        "Total expansions: 9 · used snippets: 2/3"
+    )
+    assert dialog.table.rowCount() == 2
+    assert dialog.table.item(0, 0).text() == "often"
+    assert dialog.table.item(0, 1).text() == "Work"
+    assert dialog.table.item(0, 2).text() == "7"
+    assert dialog.table.item(0, 3).text() == "2026-07-29 10:30"
+    assert dialog.table.item(1, 0).text() == "sometimes"
+    assert dialog.reset_selected_button.isEnabled()
+    assert dialog.reset_all_button.isEnabled()
 
     dialog.deleteLater()
     application.processEvents()

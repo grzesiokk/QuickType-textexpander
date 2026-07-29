@@ -273,6 +273,28 @@ class Storage:
             )
         return self.get_snippet(snippet_id)
 
+    def reset_usage(self, snippet_id: int | None = None) -> int:
+        with self._connection() as connection:
+            if snippet_id is None:
+                cursor = connection.execute(
+                    """
+                    UPDATE snippets
+                    SET usage_count = 0, last_used_at = NULL
+                    WHERE usage_count <> 0 OR last_used_at IS NOT NULL
+                    """
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE snippets
+                    SET usage_count = 0, last_used_at = NULL
+                    WHERE id = ?
+                      AND (usage_count <> 0 OR last_used_at IS NOT NULL)
+                    """,
+                    (snippet_id,),
+                )
+        return cursor.rowcount
+
     def import_snippets(self, snippets: list[Snippet], *, replace: bool) -> tuple[int, int]:
         for snippet in snippets:
             issues = validate_abbreviation(snippet.abbreviation)

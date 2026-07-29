@@ -64,6 +64,45 @@ def test_usage_is_recorded(storage: Storage) -> None:
     assert updated.last_used_at is not None
 
 
+def test_usage_can_be_reset_for_one_or_all_snippets(storage: Storage) -> None:
+    first = storage.save_snippet(
+        Snippet(
+            None,
+            "first",
+            "One",
+            TriggerMode.IMMEDIATE,
+            usage_count=4,
+            last_used_at=datetime(2026, 7, 29, 9, 0),
+        )
+    )
+    second = storage.save_snippet(
+        Snippet(
+            None,
+            "second",
+            "Two",
+            TriggerMode.IMMEDIATE,
+            usage_count=2,
+            last_used_at=datetime(2026, 7, 29, 10, 0),
+        )
+    )
+
+    assert storage.reset_usage(first.id) == 1
+    reset_first = storage.get_snippet(int(first.id))
+    unchanged_second = storage.get_snippet(int(second.id))
+    assert reset_first is not None
+    assert reset_first.usage_count == 0
+    assert reset_first.last_used_at is None
+    assert unchanged_second is not None
+    assert unchanged_second.usage_count == 2
+
+    assert storage.reset_usage() == 1
+    reset_second = storage.get_snippet(int(second.id))
+    assert reset_second is not None
+    assert reset_second.usage_count == 0
+    assert reset_second.last_used_at is None
+    assert storage.reset_usage() == 0
+
+
 def test_category_is_normalized_and_persisted(storage: Storage) -> None:
     saved = storage.save_snippet(
         Snippet(

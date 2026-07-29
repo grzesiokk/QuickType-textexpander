@@ -553,6 +553,169 @@ class CategoryManagerDialog(QDialog):
         self.clear_button.setEnabled(selected)
 
 
+class StatisticsDialog(QDialog):
+    def __init__(
+        self,
+        storage: Storage,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.storage = storage
+        self.t = translator
+        self.changed = False
+        self.setModal(True)
+        self.resize(700, 430)
+        self.setWindowTitle(self.t("statistics"))
+
+        layout = QVBoxLayout(self)
+        self.summary_label = QLabel()
+        self.summary_label.setProperty("kind", "emptyTitle")
+        layout.addWidget(self.summary_label)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        self.table.setHorizontalHeaderLabels(
+            [
+                self.t("shortcut_column"),
+                self.t("category_column"),
+                self.t("usage_column"),
+                self.t("last_used_column"),
+            ]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.table.setColumnWidth(1, 150)
+        self.table.setColumnWidth(2, 80)
+        self.table.setColumnWidth(3, 160)
+        self.table.itemSelectionChanged.connect(self._update_buttons)
+        layout.addWidget(self.table, 1)
+
+        self.empty_label = QLabel(self.t("statistics_empty"))
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.empty_label)
+
+        actions = QHBoxLayout()
+        self.reset_selected_button = QPushButton(self.t("reset_selected_usage"))
+        self.reset_selected_button.clicked.connect(self.reset_selected)
+        actions.addWidget(self.reset_selected_button)
+        self.reset_all_button = QPushButton(self.t("reset_all_usage"))
+        self.reset_all_button.clicked.connect(self.reset_all)
+        actions.addWidget(self.reset_all_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.reload_statistics()
+
+    @property
+    def selected_snippet_id(self) -> int | None:
+        selected = self.table.selectedItems()
+        if not selected:
+            return None
+        value = selected[0].data(ID_ROLE)
+        return int(value) if value is not None else None
+
+    def reload_statistics(self, *, select_id: int | None = None) -> None:
+        snippets = self.storage.list_snippets()
+        total = sum(snippet.usage_count for snippet in snippets)
+        used = sorted(
+            (snippet for snippet in snippets if snippet.usage_count > 0),
+            key=lambda snippet: (
+                -snippet.usage_count,
+                snippet.abbreviation.casefold(),
+                snippet.abbreviation,
+            ),
+        )
+        self.summary_label.setText(
+            self.t(
+                "statistics_summary",
+                total=total,
+                used=len(used),
+                all=len(snippets),
+            )
+        )
+        self.table.setRowCount(0)
+        for snippet in used:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            abbreviation = QTableWidgetItem(snippet.abbreviation)
+            abbreviation.setData(ID_ROLE, snippet.id)
+            self.table.setItem(row, 0, abbreviation)
+            self.table.setItem(
+                row,
+                1,
+                QTableWidgetItem(
+                    snippet.category if snippet.category else self.t("uncategorized")
+                ),
+            )
+            usage = QTableWidgetItem(str(snippet.usage_count))
+            usage.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 2, usage)
+            self.table.setItem(
+                row,
+                3,
+                QTableWidgetItem(self._format_last_used(snippet)),
+            )
+            if snippet.id == select_id:
+                self.table.selectRow(row)
+        if self.table.rowCount() and not self.table.selectedItems():
+            self.table.selectRow(0)
+        self.empty_label.setVisible(not used)
+        self.table.setVisible(bool(used))
+        self._update_buttons()
+
+    def reset_selected(self) -> None:
+        snippet_id = self.selected_snippet_id
+        if snippet_id is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            self.t("reset_usage_title"),
+            self.t("reset_selected_usage_text"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self.storage.reset_usage(snippet_id):
+            self.changed = True
+            self.reload_statistics()
+
+    def reset_all(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            self.t("reset_usage_title"),
+            self.t("reset_all_usage_text"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self.storage.reset_usage():
+            self.changed = True
+            self.reload_statistics()
+
+    def _update_buttons(self) -> None:
+        self.reset_selected_button.setEnabled(
+            self.selected_snippet_id is not None
+        )
+        self.reset_all_button.setEnabled(self.table.rowCount() > 0)
+
+    def _format_last_used(self, snippet: Snippet) -> str:
+        if snippet.last_used_at is None:
+            return self.t("never_used")
+        if self.t.language == "pl":
+            return snippet.last_used_at.strftime("%d.%m.%Y %H:%M")
+        return snippet.last_used_at.strftime("%Y-%m-%d %H:%M")
+
+
 class MainWindow(QMainWindow):
     language_change_requested = Signal(str)
     active_change_requested = Signal(bool)
@@ -634,6 +797,10 @@ class MainWindow(QMainWindow):
         self.categories_action = QAction(self)
         self.categories_action.triggered.connect(self.open_category_manager)
         toolbar.addAction(self.categories_action)
+
+        self.statistics_action = QAction(self)
+        self.statistics_action.triggered.connect(self.open_statistics)
+        toolbar.addAction(self.statistics_action)
         toolbar.addSeparator()
 
         self.active_action = QAction(self)
@@ -820,6 +987,7 @@ class MainWindow(QMainWindow):
         self.export_action.setText(self.t("export"))
         self.restore_action.setText(self.t("restore"))
         self.categories_action.setText(self.t("manage_categories"))
+        self.statistics_action.setText(self.t("statistics"))
         self.active_action.setText(self.t("engine_active"))
         self.settings_action.setText(self.t("settings"))
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
@@ -1370,6 +1538,17 @@ class MainWindow(QMainWindow):
         self.reload_snippets()
         self.snippets_changed.emit()
         self.status_message.setText(self.t("categories_updated"))
+
+    def open_statistics(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        selected_id = self._current_id
+        dialog = StatisticsDialog(self.storage, self.t, self)
+        dialog.exec()
+        if not dialog.changed:
+            return
+        self.reload_snippets(select_id=selected_id)
+        self.status_message.setText(self.t("statistics_reset"))
 
     def cancel_edit(self) -> None:
         if self._current_id is not None:

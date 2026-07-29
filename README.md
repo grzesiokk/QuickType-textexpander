@@ -53,6 +53,10 @@ Use **Categories** / **Kategorie** to see how many snippets belong to each
 category, rename a category across the whole library, or remove the category
 assignment without deleting its snippets.
 
+Open **Statistics** / **Statystyki** to see the total number of expansions, a
+ranking of used snippets, and their most recent use. Counters can be reset for
+the selected snippet or for the whole library after confirmation.
+
 Trigger modes:
 
 - **After delimiter** expands after Space, Tab, Enter, or common punctuation
@@ -115,6 +119,8 @@ to both typed abbreviations and the quick-access picker.
   abbreviations that already exist.
 - The snippet list shows how many times each abbreviation has expanded. The
   editor also shows the most recent use.
+- The statistics window excludes never-used snippets from the ranking while
+  still including them in the library total.
 - Settings contains an excluded-applications list. Enter one executable name
   per line, such as `KeePass.exe`, to prevent expansion in that process.
 

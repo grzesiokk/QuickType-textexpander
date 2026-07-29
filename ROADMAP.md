@@ -21,6 +21,8 @@ All phases planned for the local Windows 11 edition are complete.
   disabling, and changing favorite status without opening the full editor.
 - **Category management:** category counts, transactional bulk rename, and safe
   removal of category assignments without deleting snippets.
+- **Usage insights:** total expansion count, ranked snippet usage, last-used
+  timestamps, and selective or complete statistics reset.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 
