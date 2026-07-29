@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 from quicktype.auto_backup import AutomaticBackupManager
 from quicktype.backup import export_backup, import_backup
 from quicktype.i18n import Translator
-from quicktype.importing import analyze_import
+from quicktype.importing import ImportMode, analyze_import
 from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
 from quicktype.ui import (
@@ -48,10 +48,15 @@ def test_import_preview_shows_conflicts_and_mode_choice(tmp_path: Path) -> None:
     )
 
     assert dialog.conflict_table.rowCount() == 1
+    assert dialog.conflict_table.columnCount() == 3
     assert dialog.conflict_table.item(0, 0).text() == "keep"
-    assert not dialog.replace_existing
+    assert dialog.conflict_table.item(0, 1).text() == "Current"
+    assert dialog.conflict_table.item(0, 2).text() == "Conflict"
+    assert dialog.import_mode == ImportMode.MERGE
     dialog.mode_combo.setCurrentIndex(1)
-    assert dialog.replace_existing
+    assert dialog.import_mode == ImportMode.UPDATE
+    dialog.mode_combo.setCurrentIndex(2)
+    assert dialog.import_mode == ImportMode.REPLACE
 
     dialog.deleteLater()
     application.processEvents()

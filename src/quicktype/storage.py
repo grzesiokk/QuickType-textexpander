@@ -304,6 +304,31 @@ class Storage:
         return cursor.rowcount
 
     def import_snippets(self, snippets: list[Snippet], *, replace: bool) -> tuple[int, int]:
+        added, _updated, skipped = self._write_import(
+            snippets,
+            replace=replace,
+            overwrite_conflicts=False,
+        )
+        return added, skipped
+
+    def update_import_snippets(
+        self,
+        snippets: list[Snippet],
+    ) -> tuple[int, int]:
+        added, updated, _skipped = self._write_import(
+            snippets,
+            replace=False,
+            overwrite_conflicts=True,
+        )
+        return added, updated
+
+    def _write_import(
+        self,
+        snippets: list[Snippet],
+        *,
+        replace: bool,
+        overwrite_conflicts: bool,
+    ) -> tuple[int, int, int]:
         for snippet in snippets:
             issues = validate_abbreviation(snippet.abbreviation)
             if issues:
@@ -319,6 +344,7 @@ class Storage:
 
         now = datetime.now().isoformat(timespec="seconds")
         added = 0
+        updated = 0
         skipped = 0
         with self._connection() as connection:
             if replace:
@@ -332,18 +358,23 @@ class Storage:
 
             for snippet in snippets:
                 if snippet.abbreviation in existing:
-                    skipped += 1
+                    if overwrite_conflicts:
+                        values = self._import_values(snippet, now)
+                        connection.execute(
+                            """
+                            UPDATE snippets
+                            SET expansion = ?, trigger_mode = ?, enabled = ?,
+                                created_at = ?, updated_at = ?, usage_count = ?,
+                                last_used_at = ?, category = ?, favorite = ?,
+                                applications = ?
+                            WHERE abbreviation = ?
+                            """,
+                            values[1:] + (snippet.abbreviation,),
+                        )
+                        updated += 1
+                    else:
+                        skipped += 1
                     continue
-                created_at = (
-                    snippet.created_at.isoformat(timespec="seconds")
-                    if snippet.created_at
-                    else now
-                )
-                updated_at = (
-                    snippet.updated_at.isoformat(timespec="seconds")
-                    if snippet.updated_at
-                    else created_at
-                )
                 connection.execute(
                     """
                     INSERT INTO snippets(
@@ -351,28 +382,45 @@ class Storage:
                         usage_count, last_used_at, category, favorite, applications
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        snippet.abbreviation,
-                        snippet.expansion,
-                        snippet.trigger_mode.value,
-                        int(snippet.enabled),
-                        created_at,
-                        updated_at,
-                        max(0, snippet.usage_count),
-                        snippet.last_used_at.isoformat(timespec="seconds")
-                        if snippet.last_used_at
-                        else None,
-                        snippet.category.strip(),
-                        int(snippet.favorite),
-                        json.dumps(
-                            normalize_applications(snippet.applications),
-                            ensure_ascii=False,
-                        ),
-                    ),
+                    self._import_values(snippet, now),
                 )
                 existing.add(snippet.abbreviation)
                 added += 1
-        return added, skipped
+        return added, updated, skipped
+
+    @staticmethod
+    def _import_values(
+        snippet: Snippet,
+        now: str,
+    ) -> tuple[object, ...]:
+        created_at = (
+            snippet.created_at.isoformat(timespec="seconds")
+            if snippet.created_at
+            else now
+        )
+        updated_at = (
+            snippet.updated_at.isoformat(timespec="seconds")
+            if snippet.updated_at
+            else created_at
+        )
+        return (
+            snippet.abbreviation,
+            snippet.expansion,
+            snippet.trigger_mode.value,
+            int(snippet.enabled),
+            created_at,
+            updated_at,
+            max(0, snippet.usage_count),
+            snippet.last_used_at.isoformat(timespec="seconds")
+            if snippet.last_used_at
+            else None,
+            snippet.category.strip(),
+            int(snippet.favorite),
+            json.dumps(
+                normalize_applications(snippet.applications),
+                ensure_ascii=False,
+            ),
+        )
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         with self._connection() as connection:

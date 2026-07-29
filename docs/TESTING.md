@@ -33,8 +33,10 @@ Before publishing a release:
 7. Edit, duplicate, delete, and export snippets. Verify the right-click actions
    and double-click toggles in the snippet list.
 8. Import a backup containing both new and conflicting abbreviations. Verify the
-   preview counts and conflict list, test both merge and replace modes, and
-   confirm a `QuickType-before-import-*.json` safety copy is created each time.
+   preview counts and side-by-side current/imported expansions. Test merge,
+   update-conflicts, and full replace modes; confirm unrelated local snippets
+   survive update mode and a `QuickType-before-import-*.json` safety copy is
+   created each time.
 9. Sort each list column, especially usage values such as 2 and 10. Combine
    search and category filters, verify the visible count, then export only the
    visible snippets and import that file into a separate test library.
