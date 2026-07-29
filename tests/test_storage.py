@@ -190,6 +190,54 @@ def test_import_can_merge_or_replace(storage: Storage) -> None:
     assert replaced["new"].favorite
 
 
+def test_import_can_update_conflicts_without_removing_other_snippets(
+    storage: Storage,
+) -> None:
+    original = storage.save_snippet(
+        Snippet(
+            None,
+            "keep",
+            "Old",
+            TriggerMode.DELIMITER,
+            usage_count=2,
+            category="Local",
+        )
+    )
+    storage.save_snippet(
+        Snippet(None, "untouched", "Local only", TriggerMode.IMMEDIATE)
+    )
+    incoming = [
+        Snippet(
+            None,
+            "keep",
+            "From backup",
+            TriggerMode.IMMEDIATE,
+            enabled=False,
+            usage_count=7,
+            category="Imported",
+            favorite=True,
+            applications=("Code.exe",),
+        ),
+        Snippet(None, "new", "New", TriggerMode.DELIMITER),
+    ]
+
+    assert storage.update_import_snippets(incoming) == (1, 1)
+
+    current = {
+        snippet.abbreviation: snippet for snippet in storage.list_snippets()
+    }
+    assert set(current) == {"keep", "new", "untouched"}
+    assert current["keep"].id == original.id
+    assert current["keep"].expansion == "From backup"
+    assert current["keep"].trigger_mode == TriggerMode.IMMEDIATE
+    assert not current["keep"].enabled
+    assert current["keep"].usage_count == 7
+    assert current["keep"].category == "Imported"
+    assert current["keep"].favorite
+    assert current["keep"].applications == ("Code.exe",)
+    assert current["untouched"].expansion == "Local only"
+
+
 def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None:
     path = tmp_path / "legacy.sqlite3"
     connection = sqlite3.connect(path)

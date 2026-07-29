@@ -135,8 +135,11 @@ to both typed abbreviations and the quick-access picker.
   dates and snippet counts. Before replacing the library, QuickType saves an
   additional `QuickType-before-restore-*.json` safety copy of the current state.
 - **Import** first shows how many snippets are new and lists every abbreviation
-  that conflicts with the current library. Choose **Merge** to add only new
-  snippets or **Replace** to replace the full library.
+  that conflicts with the current library. The conflict table compares the
+  current expansion with the expansion stored in the backup.
+- Choose **Merge** to add only new snippets, **Update** to add new snippets and
+  overwrite only conflicts while preserving the rest of the library, or
+  **Replace** to replace the full library.
 - Before either import mode changes data, QuickType writes a timestamped
   `QuickType-before-import-*.json` safety copy of the current library to
   `QuickTypeData\Backups`.

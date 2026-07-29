@@ -59,7 +59,12 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
-from .importing import ImportAnalysis, analyze_import, apply_import
+from .importing import (
+    ImportAnalysis,
+    ImportMode,
+    analyze_import,
+    apply_import,
+)
 from .maintenance import (
     collect_data_summary,
     create_manual_backup,
@@ -456,7 +461,7 @@ class ImportPreviewDialog(QDialog):
         self.analysis = analysis
         self.t = translator
         self.setModal(True)
-        self.resize(620, 420)
+        self.resize(820, 460)
         self.setWindowTitle(self.t("import_preview_title"))
 
         layout = QVBoxLayout(self)
@@ -481,29 +486,59 @@ class ImportPreviewDialog(QDialog):
         layout.addWidget(summary)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem(self.t("import_merge_mode"), False)
-        self.mode_combo.addItem(self.t("import_replace_mode"), True)
+        self.mode_combo.addItem(
+            self.t("import_merge_mode"),
+            ImportMode.MERGE.value,
+        )
+        self.mode_combo.addItem(
+            self.t("import_update_mode"),
+            ImportMode.UPDATE.value,
+        )
+        self.mode_combo.addItem(
+            self.t("import_replace_mode"),
+            ImportMode.REPLACE.value,
+        )
         layout.addWidget(self.mode_combo)
 
         conflict_label = QLabel(self.t("import_conflicts"))
+        conflict_label.setVisible(bool(analysis.conflicts))
         layout.addWidget(conflict_label)
-        self.conflict_table = QTableWidget(0, 1)
+        self.conflict_table = QTableWidget(0, 3)
         self.conflict_table.setHorizontalHeaderLabels(
-            [self.t("shortcut_column")]
+            [
+                self.t("shortcut_column"),
+                self.t("import_current_expansion"),
+                self.t("import_incoming_expansion"),
+            ]
         )
         self.conflict_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.conflict_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.conflict_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
         )
         self.conflict_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
         self.conflict_table.verticalHeader().hide()
-        for abbreviation in analysis.conflicts:
+        for conflict in analysis.conflicts:
             row = self.conflict_table.rowCount()
             self.conflict_table.insertRow(row)
-            self.conflict_table.setItem(
-                row, 0, QTableWidgetItem(abbreviation)
+            abbreviation_item = QTableWidgetItem(conflict.abbreviation)
+            current_item = QTableWidgetItem(
+                self._expansion_preview(conflict.current.expansion)
             )
+            incoming_item = QTableWidgetItem(
+                self._expansion_preview(conflict.incoming.expansion)
+            )
+            current_item.setToolTip(conflict.current.expansion)
+            incoming_item.setToolTip(conflict.incoming.expansion)
+            self.conflict_table.setItem(row, 0, abbreviation_item)
+            self.conflict_table.setItem(row, 1, current_item)
+            self.conflict_table.setItem(row, 2, incoming_item)
         self.conflict_table.setVisible(bool(analysis.conflicts))
         layout.addWidget(self.conflict_table, 1)
 
@@ -529,8 +564,16 @@ class ImportPreviewDialog(QDialog):
         layout.addWidget(buttons)
 
     @property
-    def replace_existing(self) -> bool:
-        return bool(self.mode_combo.currentData())
+    def import_mode(self) -> ImportMode:
+        return ImportMode(str(self.mode_combo.currentData()))
+
+    @staticmethod
+    def _expansion_preview(value: str, limit: int = 120) -> str:
+        preview = value.replace("\r\n", "\n").replace("\r", "\n")
+        preview = " ↵ ".join(preview.split("\n"))
+        if len(preview) <= limit:
+            return preview
+        return preview[: limit - 1] + "…"
 
 
 class CategoryManagerDialog(QDialog):
@@ -1802,7 +1845,7 @@ class MainWindow(QMainWindow):
             result = apply_import(
                 self.storage,
                 analysis,
-                replace=dialog.replace_existing,
+                mode=dialog.import_mode,
             )
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, self.t("import_error_title"), str(error))
@@ -1816,6 +1859,7 @@ class MainWindow(QMainWindow):
             self.t(
                 "import_success_with_safety",
                 added=result.added,
+                updated=result.updated,
                 skipped=result.skipped,
                 safety=result.safety_copy.name,
             )
