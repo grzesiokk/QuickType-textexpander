@@ -46,6 +46,19 @@ All phases planned for the local Windows 11 edition are complete.
   from the toolbar, `Ctrl+Shift+N`, or the system-tray menu.
 - **Global capture shortcut:** configurable Windows-wide clipboard capture that
   remains available while the window is hidden or expansion is paused.
+- **Stability and diagnostics:** privacy-safe health reports, 10,000-snippet
+  stress coverage, indexed matching, and frozen-EXE single-instance smoke tests.
+- **Startup recovery:** SQLite integrity checks, newest-valid-backup recovery,
+  quarantine of damaged database files, and configurable backup retention.
+- **Bulk productivity:** extended row selection with transactional enable,
+  disable, favorite, category, export, and delete operations plus searchable
+  restore differences.
+- **Accessible appearance:** light, dark, and high-contrast themes, accessible
+  control names, keyboard shortcuts and tab order, and persisted window,
+  splitter, and column state.
+- **Quality and release automation:** linting, core type checking, coverage,
+  dependency auditing, Dependabot, SBOM generation, tag-triggered releases,
+  checksums, and portable executable smoke testing.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 

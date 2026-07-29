@@ -6,9 +6,14 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QInputDialog,
+    QMessageBox,
+)
 
 from quicktype.auto_backup import AutomaticBackupManager
 from quicktype.backup import export_backup, import_backup
@@ -28,6 +33,8 @@ from quicktype.ui import (
     SettingsDialog,
     StatisticsDialog,
     TrayController,
+    apply_application_style,
+    normalize_theme,
 )
 
 
@@ -117,12 +124,61 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
         database_path=storage.path,
         quick_access_hotkey="ctrl_shift_space",
         clipboard_capture_hotkey="alt_shift_n",
+        backup_retention=37,
+        theme="dark",
     )
     assert dialog.selected_excluded_processes == {"KeePass.exe", "Code.exe"}
     assert dialog.selected_quick_access_hotkey == "ctrl_shift_space"
     assert dialog.selected_clipboard_capture_hotkey == "alt_shift_n"
+    assert dialog.selected_backup_retention == 37
+    assert dialog.selected_theme == "dark"
     dialog.deleteLater()
     window.deleteLater()
+    application.processEvents()
+
+
+def test_themes_and_main_window_layout_state_are_persisted(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(None, "sig", "Regards", TriggerMode.IMMEDIATE)
+    )
+    first = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+        theme="dark",
+    )
+    first.resize(1180, 740)
+    first.table.setColumnWidth(3, 181)
+    first.main_splitter.setSizes([470, 680])
+    saved_splitter_sizes = first.main_splitter.sizes()
+    first._save_ui_state()
+
+    second = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+        theme="dark",
+    )
+
+    assert second.table.columnWidth(3) == 181
+    assert second.main_splitter.sizes() == saved_splitter_sizes
+    assert second.search_edit.accessibleName() == "Snippet search"
+    apply_application_style(application, "dark")
+    assert "#1e2027" in application.styleSheet()
+    apply_application_style(application, "high_contrast")
+    assert "#ffff00" in application.styleSheet()
+    assert normalize_theme("unknown") == "light"
+    apply_application_style(application, "light")
+
+    first.deleteLater()
+    second.deleteLater()
     application.processEvents()
 
 
@@ -321,6 +377,10 @@ def test_backup_restore_dialog_lists_and_filters_all_backup_types(
     assert "[Changed] sig — expansion" in report
     assert "[Removed] local" in report
     assert "[Unchanged] same" in report
+    dialog.change_filter.setCurrentIndex(0)
+    dialog.change_search.setText("Local only")
+    assert dialog.change_table.rowCount() == 1
+    assert dialog.change_table.item(0, 1).text() == "local"
 
     dialog.deleteLater()
     application.processEvents()
@@ -526,6 +586,93 @@ def test_main_window_sorts_counts_and_exports_visible_snippets(
     application.processEvents()
 
 
+def test_main_window_bulk_updates_exports_and_deletes_selection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    for abbreviation in ("alpha", "beta", "gamma"):
+        storage.save_snippet(
+            Snippet(
+                None,
+                abbreviation,
+                abbreviation.upper(),
+                TriggerMode.IMMEDIATE,
+            )
+        )
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+
+    def select(*abbreviations: str) -> None:
+        window.table.clearSelection()
+        selection = window.table.selectionModel()
+        for row in range(window.table.rowCount()):
+            if window.table.item(row, 2).text() in abbreviations:
+                selection.select(
+                    window.table.model().index(row, 2),
+                    QItemSelectionModel.SelectionFlag.Select
+                    | QItemSelectionModel.SelectionFlag.Rows,
+                )
+
+    select("alpha", "beta")
+    assert len(window.selected_snippet_ids()) == 2
+    window.bulk_set_enabled(False)
+    current = {
+        snippet.abbreviation: snippet for snippet in storage.list_snippets()
+    }
+    assert not current["alpha"].enabled
+    assert not current["beta"].enabled
+    assert current["gamma"].enabled
+
+    select("alpha", "beta")
+    window.bulk_set_favorite(True)
+    monkeypatch.setattr(
+        QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: ("Team", True),
+    )
+    select("alpha", "beta")
+    window.bulk_change_category()
+    current = {
+        snippet.abbreviation: snippet for snippet in storage.list_snippets()
+    }
+    assert current["alpha"].favorite and current["beta"].favorite
+    assert current["alpha"].category == "Team"
+    assert current["beta"].category == "Team"
+
+    destination = tmp_path / "selected.json"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(destination), ""),
+    )
+    select("alpha", "beta")
+    window.export_selected_snippets()
+    assert {
+        snippet.abbreviation for snippet in import_backup(destination)
+    } == {"alpha", "beta"}
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+    select("alpha", "beta")
+    window.delete_selected()
+    assert [
+        snippet.abbreviation for snippet in storage.list_snippets()
+    ] == ["gamma"]
+
+    window.deleteLater()
+    application.processEvents()
+
+
 def test_data_maintenance_dialog_creates_backup_and_checks_database(
     tmp_path: Path,
 ) -> None:
@@ -544,6 +691,9 @@ def test_data_maintenance_dialog_creates_backup_and_checks_database(
     assert "JSON backups: 1" in dialog.summary_label.text()
     dialog.check_database()
     assert dialog.result_label.text() == "The database integrity check passed."
+    dialog.copy_diagnostics_button.click()
+    assert "QuickType diagnostic report" in QApplication.clipboard().text()
+    assert "Regards" not in QApplication.clipboard().text()
 
     dialog.deleteLater()
     application.processEvents()

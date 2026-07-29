@@ -55,6 +55,35 @@ def test_settings_are_upserted(storage: Storage) -> None:
     assert storage.get_setting("language") == "en"
 
 
+def test_bulk_updates_and_deletion_are_transactional(storage: Storage) -> None:
+    one = storage.save_snippet(
+        Snippet(None, "one", "1", TriggerMode.IMMEDIATE)
+    )
+    two = storage.save_snippet(
+        Snippet(None, "two", "2", TriggerMode.IMMEDIATE)
+    )
+    three = storage.save_snippet(
+        Snippet(None, "three", "3", TriggerMode.IMMEDIATE)
+    )
+    identifiers = [int(one.id), int(two.id)]
+
+    assert storage.update_snippets(
+        identifiers,
+        enabled=False,
+        favorite=True,
+        category="Bulk",
+    ) == 2
+    updated = {
+        snippet.abbreviation: snippet for snippet in storage.list_snippets()
+    }
+    assert not updated["one"].enabled
+    assert updated["one"].favorite
+    assert updated["one"].category == "Bulk"
+    assert updated["three"].enabled
+    assert storage.delete_snippets(identifiers) == 2
+    assert [snippet.id for snippet in storage.list_snippets()] == [three.id]
+
+
 def test_usage_is_recorded(storage: Storage) -> None:
     saved = storage.save_snippet(
         Snippet(None, "sig", "Regards", TriggerMode.DELIMITER)

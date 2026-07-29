@@ -1,3 +1,5 @@
+from time import perf_counter
+
 from quicktype.matcher import SnippetMatcher
 from quicktype.models import Snippet, TriggerMode
 
@@ -64,3 +66,18 @@ def test_special_separator_is_replayed_as_virtual_key() -> None:
     assert action is not None
     assert action.success_suffix_vk == 0x09
     assert action.fallback_vk == 0x09
+
+
+def test_large_library_matching_remains_responsive() -> None:
+    snippets = [
+        snippet(f";entry{number:05d}", TriggerMode.IMMEDIATE)
+        for number in range(10_000)
+    ]
+    started = perf_counter()
+    matcher = SnippetMatcher(snippets)
+    action = feed(matcher, ";entry09999")
+    elapsed = perf_counter() - started
+
+    assert action is not None
+    assert action.snippet.abbreviation == ";entry09999"
+    assert elapsed < 2.0

@@ -229,7 +229,11 @@ class Storage:
                             json.dumps(applications, ensure_ascii=False),
                         ),
                     )
-                    snippet_id = int(cursor.lastrowid)
+                    if cursor.lastrowid is None:
+                        raise RuntimeError(
+                            "Inserted snippet did not receive an id"
+                        )
+                    snippet_id = cursor.lastrowid
                 else:
                     cursor = connection.execute(
                         """
@@ -253,7 +257,7 @@ class Storage:
                     )
                     if cursor.rowcount == 0:
                         raise KeyError(f"Snippet {snippet.id} does not exist")
-                    snippet_id = snippet.id
+                    snippet_id = int(snippet.id)
         except sqlite3.IntegrityError as error:
             if "UNIQUE" in str(error).upper():
                 raise DuplicateAbbreviationError(snippet.abbreviation) from error
@@ -267,6 +271,64 @@ class Storage:
     def delete_snippet(self, snippet_id: int) -> None:
         with self._connection() as connection:
             connection.execute("DELETE FROM snippets WHERE id = ?", (snippet_id,))
+
+    def update_snippets(
+        self,
+        snippet_ids: list[int] | tuple[int, ...],
+        *,
+        enabled: bool | None = None,
+        favorite: bool | None = None,
+        category: str | None = None,
+    ) -> int:
+        identifiers = tuple(dict.fromkeys(snippet_ids))
+        if not identifiers:
+            return 0
+        assignments: list[str] = []
+        values: list[object] = []
+        if enabled is not None:
+            assignments.append("enabled = ?")
+            values.append(int(enabled))
+        if favorite is not None:
+            assignments.append("favorite = ?")
+            values.append(int(favorite))
+        if category is not None:
+            normalized_category = category.strip()
+            issues = validate_category(normalized_category)
+            if issues:
+                raise ValueError(issues[0].message)
+            assignments.append("category = ?")
+            values.append(normalized_category)
+        if not assignments:
+            return 0
+        assignments.append("updated_at = ?")
+        values.append(datetime.now().isoformat(timespec="seconds"))
+        placeholders = ", ".join("?" for _ in identifiers)
+        values.extend(identifiers)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE snippets
+                SET {", ".join(assignments)}
+                WHERE id IN ({placeholders})
+                """,
+                tuple(values),
+            )
+        return cursor.rowcount
+
+    def delete_snippets(
+        self,
+        snippet_ids: list[int] | tuple[int, ...],
+    ) -> int:
+        identifiers = tuple(dict.fromkeys(snippet_ids))
+        if not identifiers:
+            return 0
+        placeholders = ", ".join("?" for _ in identifiers)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                f"DELETE FROM snippets WHERE id IN ({placeholders})",
+                identifiers,
+            )
+        return cursor.rowcount
 
     def record_expansion(self, snippet_id: int) -> Snippet | None:
         timestamp = datetime.now().isoformat(timespec="seconds")

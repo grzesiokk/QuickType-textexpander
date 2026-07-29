@@ -6,6 +6,7 @@ from quicktype.auto_backup import (
     AUTO_BACKUP_PATTERN,
     AutomaticBackupManager,
     list_automatic_backups,
+    normalize_backup_retention,
 )
 from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
@@ -58,3 +59,19 @@ def test_automatic_backup_prunes_only_its_own_old_files(tmp_path: Path) -> None:
         automatic,
         reverse=True,
     )
+
+
+def test_retention_can_be_changed_and_is_bounded(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "QuickTypeData" / "quicktype.sqlite3")
+    storage.initialize()
+    manager = AutomaticBackupManager(storage, retention=4)
+    for index in range(4):
+        _save(storage, f"s{index}", str(index))
+        manager.create_if_changed()
+
+    manager.set_retention(2)
+
+    assert len(list_automatic_backups(manager.directory)) == 2
+    assert normalize_backup_retention("invalid") == 20
+    assert normalize_backup_retention(0) == 1
+    assert normalize_backup_retention(999) == 200

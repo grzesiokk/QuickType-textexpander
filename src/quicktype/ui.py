@@ -6,7 +6,14 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSignalBlocker, Qt, QUrl, Signal
+from PySide6.QtCore import (
+    QByteArray,
+    QObject,
+    QSignalBlocker,
+    Qt,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -23,13 +30,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QFormLayout,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QGridLayout,
     QGroupBox,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -38,10 +45,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QSystemTrayIcon,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -57,6 +65,7 @@ from .backup_catalog import (
     list_backup_entries,
 )
 from .constants import APP_NAME, APP_VERSION, resource_path
+from .diagnostics import collect_diagnostic_report
 from .hotkeys import (
     CLIPBOARD_CAPTURE_HOTKEY_SPECS,
     DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
@@ -110,6 +119,12 @@ CLIPBOARD_HOTKEY_TRANSLATION_KEYS = {
     "alt_shift_n": "hotkey_alt_shift_n",
     "disabled": "hotkey_disabled",
 }
+SUPPORTED_THEMES = ("light", "dark", "high_contrast")
+
+
+def normalize_theme(value: object) -> str:
+    theme = str(value or "light")
+    return theme if theme in SUPPORTED_THEMES else "light"
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -138,8 +153,10 @@ class SettingsDialog(QDialog):
         excluded_processes: set[str],
         database_path: Path,
         automatic_backups: bool = True,
+        backup_retention: int = 20,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
+        theme: str = "light",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -154,6 +171,16 @@ class SettingsDialog(QDialog):
         self.language_combo.addItem(self.t("english"), "en")
         self.language_combo.setCurrentIndex(max(0, self.language_combo.findData(language)))
         form.addRow(self.t("language"), self.language_combo)
+        self.theme_combo = QComboBox()
+        for theme_name in SUPPORTED_THEMES:
+            self.theme_combo.addItem(
+                self.t(f"theme_{theme_name}"),
+                theme_name,
+            )
+        self.theme_combo.setCurrentIndex(
+            max(0, self.theme_combo.findData(normalize_theme(theme)))
+        )
+        form.addRow(self.t("theme"), self.theme_combo)
 
         self.active_checkbox = QCheckBox(self.t("engine_active"))
         self.active_checkbox.setChecked(engine_active)
@@ -166,6 +193,17 @@ class SettingsDialog(QDialog):
         self.automatic_backups_checkbox = QCheckBox(self.t("automatic_backups"))
         self.automatic_backups_checkbox.setChecked(automatic_backups)
         form.addRow("", self.automatic_backups_checkbox)
+        self.backup_retention_spin = QSpinBox()
+        self.backup_retention_spin.setRange(1, 200)
+        self.backup_retention_spin.setValue(backup_retention)
+        self.backup_retention_spin.setEnabled(automatic_backups)
+        self.automatic_backups_checkbox.toggled.connect(
+            self.backup_retention_spin.setEnabled
+        )
+        form.addRow(
+            self.t("backup_retention"),
+            self.backup_retention_spin,
+        )
 
         self.quick_access_hotkey_combo = QComboBox()
         for hotkey in HOTKEY_SPECS:
@@ -260,6 +298,14 @@ class SettingsDialog(QDialog):
         return normalize_clipboard_capture_hotkey(
             str(self.clipboard_capture_hotkey_combo.currentData())
         )
+
+    @property
+    def selected_backup_retention(self) -> int:
+        return self.backup_retention_spin.value()
+
+    @property
+    def selected_theme(self) -> str:
+        return normalize_theme(self.theme_combo.currentData())
 
 
 class QuickAccessDialog(QDialog):
@@ -467,6 +513,13 @@ class BackupRestoreDialog(QDialog):
             self.apply_change_filter
         )
         filters.addWidget(self.change_filter)
+        self.change_search = QLineEdit()
+        self.change_search.setClearButtonEnabled(True)
+        self.change_search.setPlaceholderText(
+            self.t("restore_change_search")
+        )
+        self.change_search.textChanged.connect(self.apply_change_filter)
+        filters.addWidget(self.change_search, 1)
         filters.addStretch(1)
         layout.addLayout(filters)
 
@@ -713,12 +766,26 @@ class BackupRestoreDialog(QDialog):
         analysis: RestoreAnalysis | None,
     ) -> None:
         selected_kind = self.change_filter.currentData()
+        needle = self.change_search.text().strip().casefold()
         self.change_table.setRowCount(0)
         if analysis is None:
             self.no_changes_label.setVisible(False)
             return
         for change in analysis.changes:
             if selected_kind is not None and change.kind.value != selected_kind:
+                continue
+            searchable = " ".join(
+                (
+                    change.abbreviation,
+                    change.current.expansion if change.current else "",
+                    change.incoming.expansion if change.incoming else "",
+                    " ".join(
+                        self.t(f"restore_field_{field}")
+                        for field in change.changed_fields
+                    ),
+                )
+            ).casefold()
+            if needle and needle not in searchable:
                 continue
             self._append_change_row(change)
         self.no_changes_label.setVisible(self.change_table.rowCount() == 0)
@@ -1310,6 +1377,11 @@ class DataMaintenanceDialog(QDialog):
         self.open_folder_button = QPushButton(self.t("open_data_folder"))
         self.open_folder_button.clicked.connect(self.open_data_folder)
         actions.addWidget(self.open_folder_button, 1, 0, 1, 2)
+        self.copy_diagnostics_button = QPushButton(
+            self.t("copy_diagnostics")
+        )
+        self.copy_diagnostics_button.clicked.connect(self.copy_diagnostics)
+        actions.addWidget(self.copy_diagnostics_button, 2, 0, 1, 2)
         layout.addLayout(actions)
 
         self.result_label = QLabel()
@@ -1358,6 +1430,11 @@ class DataMaintenanceDialog(QDialog):
             )
         )
 
+    def copy_diagnostics(self) -> None:
+        report = collect_diagnostic_report(self.storage)
+        QApplication.clipboard().setText(report.as_text())
+        self.result_label.setText(self.t("diagnostics_copied"))
+
     def open_data_folder(self) -> None:
         try:
             self.storage.path.parent.mkdir(parents=True, exist_ok=True)
@@ -1380,6 +1457,8 @@ class MainWindow(QMainWindow):
     active_change_requested = Signal(bool)
     autostart_change_requested = Signal(bool)
     automatic_backups_change_requested = Signal(bool)
+    backup_retention_change_requested = Signal(int)
+    theme_change_requested = Signal(str)
     excluded_processes_change_requested = Signal(object)
     quick_access_hotkey_change_requested = Signal(str)
     clipboard_capture_hotkey_change_requested = Signal(str)
@@ -1394,9 +1473,11 @@ class MainWindow(QMainWindow):
         engine_active: bool,
         autostart: bool,
         automatic_backups: bool = True,
+        backup_retention: int = 20,
         excluded_processes: set[str] | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
+        theme: str = "light",
     ) -> None:
         super().__init__()
         self.storage = storage
@@ -1404,6 +1485,8 @@ class MainWindow(QMainWindow):
         self.engine_active = engine_active
         self.autostart = autostart
         self.automatic_backups = automatic_backups
+        self.backup_retention = backup_retention
+        self.theme = normalize_theme(theme)
         self.excluded_processes = set(excluded_processes or set())
         self.quick_access_hotkey = normalize_quick_access_hotkey(
             quick_access_hotkey
@@ -1426,6 +1509,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.retranslate()
         self.reload_snippets()
+        self._restore_ui_state()
 
     def _build_ui(self) -> None:
         toolbar = QToolBar()
@@ -1464,8 +1548,57 @@ class MainWindow(QMainWindow):
 
         self.delete_action = QAction(self)
         self.delete_action.setShortcut(QKeySequence.StandardKey.Delete)
-        self.delete_action.triggered.connect(self.delete_current)
+        self.delete_action.triggered.connect(self.delete_selected)
         toolbar.addAction(self.delete_action)
+
+        self.bulk_enable_action = QAction(self)
+        self.bulk_enable_action.setShortcut(QKeySequence("Ctrl+Alt+E"))
+        self.bulk_enable_action.triggered.connect(
+            lambda: self.bulk_set_enabled(True)
+        )
+        self.bulk_disable_action = QAction(self)
+        self.bulk_disable_action.setShortcut(QKeySequence("Ctrl+Alt+D"))
+        self.bulk_disable_action.triggered.connect(
+            lambda: self.bulk_set_enabled(False)
+        )
+        self.bulk_favorite_action = QAction(self)
+        self.bulk_favorite_action.setShortcut(QKeySequence("Ctrl+Alt+F"))
+        self.bulk_favorite_action.triggered.connect(
+            lambda: self.bulk_set_favorite(True)
+        )
+        self.bulk_unfavorite_action = QAction(self)
+        self.bulk_unfavorite_action.triggered.connect(
+            lambda: self.bulk_set_favorite(False)
+        )
+        self.bulk_category_action = QAction(self)
+        self.bulk_category_action.setShortcut(QKeySequence("Ctrl+Alt+C"))
+        self.bulk_category_action.triggered.connect(self.bulk_change_category)
+        self.bulk_export_action = QAction(self)
+        self.bulk_export_action.setShortcut(QKeySequence("Ctrl+Alt+X"))
+        self.bulk_export_action.triggered.connect(
+            self.export_selected_snippets
+        )
+        self.bulk_delete_action = QAction(self)
+        self.bulk_delete_action.triggered.connect(self.delete_selected)
+        self.bulk_menu = QMenu(self)
+        self.bulk_menu.addAction(self.bulk_enable_action)
+        self.bulk_menu.addAction(self.bulk_disable_action)
+        self.bulk_menu.addSeparator()
+        self.bulk_menu.addAction(self.bulk_favorite_action)
+        self.bulk_menu.addAction(self.bulk_unfavorite_action)
+        self.bulk_menu.addAction(self.bulk_category_action)
+        self.bulk_menu.addSeparator()
+        self.bulk_menu.addAction(self.bulk_export_action)
+        self.bulk_menu.addAction(self.bulk_delete_action)
+        self.bulk_button = QToolButton()
+        self.bulk_button.setMenu(self.bulk_menu)
+        self.bulk_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.bulk_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        toolbar.addWidget(self.bulk_button)
 
         self.import_action = QAction(self)
         self.import_action.triggered.connect(self.import_snippets)
@@ -1522,12 +1655,12 @@ class MainWindow(QMainWindow):
         self.settings_action.triggered.connect(self.open_settings)
         toolbar.addAction(self.settings_action)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_list_panel())
-        splitter.addWidget(self._build_editor_panel())
-        splitter.setSizes([390, 700])
-        self.setCentralWidget(splitter)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.addWidget(self._build_list_panel())
+        self.main_splitter.addWidget(self._build_editor_panel())
+        self.main_splitter.setSizes([390, 700])
+        self.setCentralWidget(self.main_splitter)
 
         status = QStatusBar()
         self.status_state = QLabel()
@@ -1544,6 +1677,15 @@ class MainWindow(QMainWindow):
         clear_filters_shortcut.activated.connect(self.clear_filters)
         copy_preview_shortcut = QShortcut(QKeySequence("Ctrl+Shift+C"), self)
         copy_preview_shortcut.activated.connect(self.copy_preview)
+        QWidget.setTabOrder(self.search_edit, self.category_filter)
+        QWidget.setTabOrder(self.category_filter, self.table)
+        QWidget.setTabOrder(self.table, self.abbreviation_edit)
+        QWidget.setTabOrder(self.abbreviation_edit, self.category_combo)
+        QWidget.setTabOrder(self.category_combo, self.mode_combo)
+        QWidget.setTabOrder(self.mode_combo, self.applications_edit)
+        QWidget.setTabOrder(self.applications_edit, self.enabled_checkbox)
+        QWidget.setTabOrder(self.enabled_checkbox, self.favorite_checkbox)
+        QWidget.setTabOrder(self.favorite_checkbox, self.expansion_edit)
 
     def _build_list_panel(self) -> QWidget:
         panel = QWidget()
@@ -1567,7 +1709,7 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, 6)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -1708,6 +1850,14 @@ class MainWindow(QMainWindow):
         )
         self.duplicate_action.setText(self.t("duplicate"))
         self.delete_action.setText(self.t("delete"))
+        self.bulk_button.setText(self.t("bulk_actions"))
+        self.bulk_enable_action.setText(self.t("bulk_enable"))
+        self.bulk_disable_action.setText(self.t("bulk_disable"))
+        self.bulk_favorite_action.setText(self.t("bulk_favorite"))
+        self.bulk_unfavorite_action.setText(self.t("bulk_unfavorite"))
+        self.bulk_category_action.setText(self.t("bulk_category"))
+        self.bulk_export_action.setText(self.t("bulk_export"))
+        self.bulk_delete_action.setText(self.t("bulk_delete"))
         self.import_action.setText(self.t("import"))
         self.export_action.setText(self.t("export"))
         self.export_filtered_action.setText(self.t("export_filtered"))
@@ -1719,6 +1869,15 @@ class MainWindow(QMainWindow):
         self.settings_action.setText(self.t("settings"))
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
         self.search_edit.setToolTip(self.t("search_tooltip"))
+        self.search_edit.setAccessibleName(self.t("search_accessible"))
+        self.category_filter.setAccessibleName(
+            self.t("category_filter_accessible")
+        )
+        self.table.setAccessibleName(self.t("snippet_table_accessible"))
+        self.expansion_edit.setAccessibleName(
+            self.t("expansion_accessible")
+        )
+        self.bulk_button.setAccessibleName(self.t("bulk_actions"))
         self.table.setHorizontalHeaderLabels(
             [
                 self.t("favorite_column"),
@@ -2079,6 +2238,121 @@ class MainWindow(QMainWindow):
         self.status_message.setText(self.t("saved", abbr=saved.abbreviation))
         return True
 
+    def selected_snippet_ids(self) -> list[int]:
+        rows = self.table.selectionModel().selectedRows(2)
+        identifiers: list[int] = []
+        for index in sorted(rows, key=lambda item: item.row()):
+            value = index.data(ID_ROLE)
+            if isinstance(value, int):
+                identifiers.append(value)
+        return identifiers
+
+    def selected_snippets(self) -> list[Snippet]:
+        identifiers = set(self.selected_snippet_ids())
+        return [
+            snippet
+            for snippet in self.snippets
+            if snippet.id in identifiers
+        ]
+
+    def bulk_set_enabled(self, enabled: bool) -> None:
+        self._apply_bulk_update(enabled=enabled)
+
+    def bulk_set_favorite(self, favorite: bool) -> None:
+        self._apply_bulk_update(favorite=favorite)
+
+    def bulk_change_category(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        identifiers = self.selected_snippet_ids()
+        if not identifiers:
+            return
+        category, accepted = QInputDialog.getText(
+            self,
+            self.t("bulk_category_title"),
+            self.t("bulk_category_prompt", count=len(identifiers)),
+        )
+        if not accepted:
+            return
+        try:
+            changed = self.storage.update_snippets(
+                identifiers,
+                category=category,
+            )
+        except ValueError as error:
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                str(error),
+            )
+            return
+        self._finish_bulk_change(changed)
+
+    def _apply_bulk_update(
+        self,
+        *,
+        enabled: bool | None = None,
+        favorite: bool | None = None,
+    ) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        identifiers = self.selected_snippet_ids()
+        if not identifiers:
+            return
+        changed = self.storage.update_snippets(
+            identifiers,
+            enabled=enabled,
+            favorite=favorite,
+        )
+        self._finish_bulk_change(changed)
+
+    def _finish_bulk_change(self, changed: int) -> None:
+        self._current_id = None
+        self._dirty = False
+        self._is_new = False
+        self.reload_snippets()
+        self.snippets_changed.emit()
+        self.status_message.setText(
+            self.t("bulk_updated", count=changed)
+        )
+
+    def export_selected_snippets(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        snippets = self.selected_snippets()
+        if not snippets:
+            return
+        self._export_snippet_collection(
+            snippets,
+            f"QuickType-selected-{datetime.now():%Y%m%d}.json",
+        )
+
+    def delete_selected(self) -> None:
+        identifiers = self.selected_snippet_ids()
+        if len(identifiers) <= 1:
+            self.delete_current()
+            return
+        if not self._maybe_resolve_dirty():
+            return
+        answer = QMessageBox.question(
+            self,
+            self.t("bulk_delete_title"),
+            self.t("bulk_delete_text", count=len(identifiers)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        deleted = self.storage.delete_snippets(identifiers)
+        self._current_id = None
+        self._dirty = False
+        self._is_new = False
+        self.reload_snippets()
+        self.snippets_changed.emit()
+        self.status_message.setText(
+            self.t("bulk_deleted", count=deleted)
+        )
+
     def delete_current(self) -> None:
         if self._current_id is None:
             return
@@ -2144,7 +2418,15 @@ class MainWindow(QMainWindow):
         item = self.table.itemAt(position)
         if item is None:
             return
-        self.table.selectRow(item.row())
+        selected_rows = {
+            index.row()
+            for index in self.table.selectionModel().selectedRows()
+        }
+        if item.row() not in selected_rows:
+            self.table.selectRow(item.row())
+        if len(self.selected_snippet_ids()) > 1:
+            self.bulk_menu.exec(self.table.viewport().mapToGlobal(position))
+            return
         source = next(
             (entry for entry in self.snippets if entry.id == self._current_id),
             None,
@@ -2506,6 +2788,8 @@ class MainWindow(QMainWindow):
             engine_active=self.engine_active,
             autostart=self.autostart,
             automatic_backups=self.automatic_backups,
+            backup_retention=self.backup_retention,
+            theme=self.theme,
             excluded_processes=self.excluded_processes,
             database_path=self.storage.path,
             quick_access_hotkey=self.quick_access_hotkey,
@@ -2524,6 +2808,12 @@ class MainWindow(QMainWindow):
             self.automatic_backups_change_requested.emit(
                 dialog.automatic_backups_checkbox.isChecked()
             )
+        if dialog.selected_backup_retention != self.backup_retention:
+            self.backup_retention_change_requested.emit(
+                dialog.selected_backup_retention
+            )
+        if dialog.selected_theme != self.theme:
+            self.theme_change_requested.emit(dialog.selected_theme)
         if dialog.selected_excluded_processes != self.excluded_processes:
             self.excluded_processes_change_requested.emit(
                 dialog.selected_excluded_processes
@@ -2551,6 +2841,12 @@ class MainWindow(QMainWindow):
 
     def set_automatic_backups(self, enabled: bool) -> None:
         self.automatic_backups = enabled
+
+    def set_backup_retention(self, retention: int) -> None:
+        self.backup_retention = retention
+
+    def set_theme(self, theme: str) -> None:
+        self.theme = normalize_theme(theme)
 
     def set_excluded_processes(self, processes: set[str]) -> None:
         self.excluded_processes = set(processes)
@@ -2594,19 +2890,49 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def _save_ui_state(self) -> None:
+        values = {
+            "ui_main_geometry": self.saveGeometry(),
+            "ui_main_header": self.table.horizontalHeader().saveState(),
+            "ui_main_splitter": self.main_splitter.saveState(),
+        }
+        for key, value in values.items():
+            self.storage.set_setting(
+                key,
+                bytes(value.toBase64()).decode("ascii"),
+            )
+
+    def _restore_ui_state(self) -> None:
+        values = (
+            ("ui_main_geometry", self.restoreGeometry),
+            (
+                "ui_main_header",
+                self.table.horizontalHeader().restoreState,
+            ),
+            ("ui_main_splitter", self.main_splitter.restoreState),
+        )
+        for key, restore in values:
+            encoded = self.storage.get_setting(key)
+            if not encoded:
+                continue
+            restore(QByteArray.fromBase64(encoded.encode("ascii")))
+
     def prepare_quit(self) -> bool:
         if not self._maybe_resolve_dirty():
             return False
+        self._save_ui_state()
         self._allow_close = True
         return True
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._allow_close:
+            self._save_ui_state()
             event.accept()
             return
         if not self._maybe_resolve_dirty():
             event.ignore()
             return
+        self._save_ui_state()
         self.hide()
         event.ignore()
 
@@ -2701,29 +3027,131 @@ class TrayController:
         )
 
 
-def apply_application_style(application: QApplication) -> None:
+def apply_application_style(
+    application: QApplication,
+    theme: str = "light",
+) -> None:
     application.setStyle("Fusion")
     application.setFont(QFont("Segoe UI", 9))
-    application.setStyleSheet(
-        """
-        QMainWindow, QDialog { background: #f6f7fb; }
-        QToolBar { background: white; border: none; border-bottom: 1px solid #e2e5ee; padding: 7px; spacing: 7px; }
-        QLineEdit, QPlainTextEdit, QComboBox, QTableWidget {
-            background: white; border: 1px solid #d7dbe7; border-radius: 6px; padding: 6px;
-            selection-background-color: #6c50e8;
+    selected = normalize_theme(theme)
+    if selected == "dark":
+        colors = {
+            "background": "#1e2027",
+            "panel": "#272a33",
+            "input": "#30343f",
+            "header": "#383d49",
+            "border": "#505767",
+            "text": "#f2f4f8",
+            "muted": "#b5bdcb",
+            "accent": "#9b87ff",
+            "accent_text": "#ffffff",
+            "warning_text": "#ffd57a",
+            "warning_bg": "#4a3a16",
+            "error": "#ff8d86",
+            "success": "#72d6a5",
         }
-        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus { border: 1px solid #6c50e8; }
-        QTableWidget { gridline-color: transparent; }
-        QHeaderView::section { background: #eceef5; border: none; padding: 7px; font-weight: 600; }
-        QPushButton { background: #ffffff; border: 1px solid #d7dbe7; border-radius: 6px; padding: 7px 12px; }
-        QPushButton:hover { border-color: #6c50e8; }
-        QPushButton:default { background: #6548dc; color: white; border-color: #6548dc; }
-        QStatusBar { background: white; border-top: 1px solid #e2e5ee; }
-        QLabel[kind="muted"] { color: #676d7e; }
-        QLabel[kind="warning"] { color: #9a6400; background: #fff4d6; padding: 8px; border-radius: 5px; }
-        QLabel[kind="error"] { color: #b42318; }
-        QLabel[kind="success"] { color: #18794e; }
-        QLabel[kind="emptyTitle"] { font-size: 17px; font-weight: 600; color: #35394a; }
+    elif selected == "high_contrast":
+        colors = {
+            "background": "#000000",
+            "panel": "#000000",
+            "input": "#000000",
+            "header": "#000000",
+            "border": "#ffffff",
+            "text": "#ffffff",
+            "muted": "#ffffff",
+            "accent": "#ffff00",
+            "accent_text": "#000000",
+            "warning_text": "#ffff00",
+            "warning_bg": "#000000",
+            "error": "#ff8080",
+            "success": "#80ff80",
+        }
+    else:
+        colors = {
+            "background": "#f6f7fb",
+            "panel": "#ffffff",
+            "input": "#ffffff",
+            "header": "#eceef5",
+            "border": "#d7dbe7",
+            "text": "#252735",
+            "muted": "#676d7e",
+            "accent": "#6548dc",
+            "accent_text": "#ffffff",
+            "warning_text": "#9a6400",
+            "warning_bg": "#fff4d6",
+            "error": "#b42318",
+            "success": "#18794e",
+        }
+    application.setStyleSheet(
+        f"""
+        QWidget {{
+            color: {colors["text"]};
+        }}
+        QMainWindow, QDialog {{
+            background: {colors["background"]};
+        }}
+        QToolBar, QStatusBar, QMenu {{
+            background: {colors["panel"]};
+            border-color: {colors["border"]};
+        }}
+        QToolBar {{
+            border: none;
+            border-bottom: 1px solid {colors["border"]};
+            padding: 7px;
+            spacing: 7px;
+        }}
+        QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QTableWidget {{
+            background: {colors["input"]};
+            border: 1px solid {colors["border"]};
+            border-radius: 6px;
+            padding: 6px;
+            selection-background-color: {colors["accent"]};
+            selection-color: {colors["accent_text"]};
+        }}
+        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus,
+        QSpinBox:focus, QTableWidget:focus {{
+            border: 2px solid {colors["accent"]};
+        }}
+        QTableWidget {{
+            gridline-color: transparent;
+        }}
+        QHeaderView::section {{
+            background: {colors["header"]};
+            border: none;
+            padding: 7px;
+            font-weight: 600;
+        }}
+        QPushButton, QToolButton {{
+            background: {colors["panel"]};
+            border: 1px solid {colors["border"]};
+            border-radius: 6px;
+            padding: 7px 12px;
+        }}
+        QPushButton:hover, QToolButton:hover {{
+            border-color: {colors["accent"]};
+        }}
+        QPushButton:default {{
+            background: {colors["accent"]};
+            color: {colors["accent_text"]};
+            border-color: {colors["accent"]};
+        }}
+        QStatusBar {{
+            border-top: 1px solid {colors["border"]};
+        }}
+        QLabel[kind="muted"] {{ color: {colors["muted"]}; }}
+        QLabel[kind="warning"] {{
+            color: {colors["warning_text"]};
+            background: {colors["warning_bg"]};
+            padding: 8px;
+            border-radius: 5px;
+        }}
+        QLabel[kind="error"] {{ color: {colors["error"]}; }}
+        QLabel[kind="success"] {{ color: {colors["success"]}; }}
+        QLabel[kind="emptyTitle"] {{
+            font-size: 17px;
+            font-weight: 600;
+            color: {colors["text"]};
+        }}
         """
     )
 

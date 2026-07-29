@@ -6,6 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .backup import export_backup, import_backup
+from .backup_catalog import list_backup_entries
 from .models import Snippet
 from .storage import Storage
 
@@ -35,6 +36,13 @@ class RestoreAnalysis:
     removed: int
     unchanged: int
     changes: tuple[RestoreChange, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseRecoveryResult:
+    restored_count: int
+    source: Path | None
+    quarantined_database: Path | None
 
 
 def analyze_restore(storage: Storage, source: Path) -> RestoreAnalysis:
@@ -103,6 +111,50 @@ def restore_backup(storage: Storage, source: Path) -> tuple[int, Path]:
     export_backup(safety_copy, current_snippets)
     added, _skipped = storage.import_snippets(restored_snippets, replace=True)
     return added, safety_copy
+
+
+def latest_recovery_backup(database: Path) -> Path | None:
+    entries = list_backup_entries(Path(database).parent / "Backups")
+    return entries[0].path if entries else None
+
+
+def recover_database(
+    database: Path,
+    source: Path | None,
+) -> DatabaseRecoveryResult:
+    path = Path(database)
+    snippets = import_backup(source) if source is not None else []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    quarantine = path.with_name(
+        f"{path.stem}-corrupt-{timestamp}{path.suffix}"
+    )
+    moved: list[tuple[Path, Path]] = []
+    for suffix in ("", "-wal", "-shm"):
+        original = Path(f"{path}{suffix}")
+        if not original.exists():
+            continue
+        preserved = Path(f"{quarantine}{suffix}")
+        original.replace(preserved)
+        moved.append((original, preserved))
+    try:
+        storage = Storage(path)
+        storage.initialize()
+        if snippets:
+            storage.import_snippets(snippets, replace=True)
+    except Exception:
+        for suffix in ("", "-wal", "-shm"):
+            created = Path(f"{path}{suffix}")
+            if created.exists():
+                created.unlink()
+        for original, preserved in moved:
+            preserved.replace(original)
+        raise
+    return DatabaseRecoveryResult(
+        restored_count=len(snippets),
+        source=Path(source) if source is not None else None,
+        quarantined_database=quarantine if moved else None,
+    )
 
 
 RESTORABLE_FIELDS = (

@@ -26,6 +26,10 @@ class SnippetMatcher:
         self._max_buffer = max_buffer
         self._buffer = ""
         self._snippets: tuple[Snippet, ...] = ()
+        self._suffix_index: dict[
+            tuple[TriggerMode, str],
+            tuple[Snippet, ...],
+        ] = {}
         self.replace_snippets(snippets or [])
 
     @property
@@ -39,6 +43,16 @@ class SnippetMatcher:
             self._snippets = tuple(
                 sorted(active, key=lambda snippet: len(snippet.abbreviation), reverse=True)
             )
+            index: dict[tuple[TriggerMode, str], list[Snippet]] = {}
+            for snippet in self._snippets:
+                key = (
+                    snippet.trigger_mode,
+                    snippet.abbreviation[-1],
+                )
+                index.setdefault(key, []).append(snippet)
+            self._suffix_index = {
+                key: tuple(values) for key, values in index.items()
+            }
             self._buffer = ""
 
     def clear(self) -> None:
@@ -95,9 +109,12 @@ class SnippetMatcher:
             )
 
     def _find_match(self, trigger_mode: TriggerMode, candidate: str) -> Snippet | None:
-        for snippet in self._snippets:
-            if snippet.trigger_mode != trigger_mode:
-                continue
+        if not candidate:
+            return None
+        for snippet in self._suffix_index.get(
+            (trigger_mode, candidate[-1]),
+            (),
+        ):
             abbreviation = snippet.abbreviation
             if not candidate.endswith(abbreviation):
                 continue

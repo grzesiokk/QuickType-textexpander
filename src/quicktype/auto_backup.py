@@ -13,6 +13,25 @@ from .storage import Storage
 AUTO_BACKUP_PATTERN = re.compile(
     r"QuickType-auto-\d{8}-\d{6}-\d{6}\.json"
 )
+DEFAULT_BACKUP_RETENTION = 20
+MIN_BACKUP_RETENTION = 1
+MAX_BACKUP_RETENTION = 200
+
+
+def normalize_backup_retention(value: object) -> int:
+    if (
+        not isinstance(value, (str, int))
+        or isinstance(value, bool)
+    ):
+        return DEFAULT_BACKUP_RETENTION
+    try:
+        retention = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_BACKUP_RETENTION
+    return min(
+        MAX_BACKUP_RETENTION,
+        max(MIN_BACKUP_RETENTION, retention),
+    )
 
 
 def list_automatic_backups(directory: Path) -> list[Path]:
@@ -30,11 +49,14 @@ def list_automatic_backups(directory: Path) -> list[Path]:
 
 
 class AutomaticBackupManager:
-    def __init__(self, storage: Storage, *, retention: int = 20) -> None:
-        if retention < 1:
-            raise ValueError("Backup retention must be at least 1.")
+    def __init__(
+        self,
+        storage: Storage,
+        *,
+        retention: int = DEFAULT_BACKUP_RETENTION,
+    ) -> None:
         self.storage = storage
-        self.retention = retention
+        self.retention = normalize_backup_retention(retention)
         self.directory = storage.path.parent / "Backups"
         self._last_fingerprint: str | None = None
 
@@ -52,6 +74,10 @@ class AutomaticBackupManager:
         self._last_fingerprint = fingerprint
         self._prune()
         return destination
+
+    def set_retention(self, retention: int) -> None:
+        self.retention = normalize_backup_retention(retention)
+        self._prune()
 
     def _prune(self) -> None:
         if not self.directory.exists():

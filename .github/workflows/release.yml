@@ -1,0 +1,78 @@
+name: Tagged release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[build,test,quality]"
+
+      - name: Prepare report directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force build | Out-Null
+
+      - name: Quality gates
+        shell: pwsh
+        run: |
+          ruff check src tests scripts
+          mypy src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+          python -m pytest --cov=quicktype --cov-report=term --cov-fail-under=72
+
+      - name: Audit dependencies and create SBOM
+        run: >-
+          pip-audit
+          --local
+          --skip-editable
+          --progress-spinner off
+          --format cyclonedx-json
+          --output build/QuickType-sbom.json
+
+      - name: Build and smoke test
+        shell: pwsh
+        run: |
+          .\build.ps1 -SkipInstall
+          .\scripts\smoke_exe.ps1
+
+      - name: Create checksum file
+        shell: pwsh
+        run: |
+          $Hash = (Get-FileHash .\dist\QuickType.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$Hash  QuickType.exe" | Set-Content .\dist\SHA256SUMS -Encoding ascii
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: QuickType ${{ github.ref_name }}
+          body: |
+            ## QuickType ${{ github.ref_name }}
+
+            Automatyczne, zweryfikowane wydanie przenośnej aplikacji dla Windows 11.
+
+            Pobierz `QuickType.exe` i uruchom go dwuklikiem. Python nie jest wymagany.
+            Pliki `SHA256SUMS` i `QuickType-sbom.json` umożliwiają sprawdzenie integralności i zależności wydania.
+          make_latest: true
+          files: |
+            dist/QuickType.exe
+            dist/SHA256SUMS
+            build/QuickType-sbom.json
