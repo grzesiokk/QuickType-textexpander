@@ -34,11 +34,13 @@ Before publishing a release:
    actions and double-click toggles in the snippet list.
 8. Rename and remove a category in the category manager. Confirm that all
    affected snippets remain present and that the category filters refresh.
-9. Restore an automatic backup and confirm that the previous state is saved as
+9. Open Statistics, verify the ranking and dates, then reset one counter and
+   all remaining counters after their confirmation prompts.
+10. Restore an automatic backup and confirm that the previous state is saved as
    `QuickType-before-restore-*.json`.
-10. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+11. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
-11. Confirm that expansion does not run in QuickType's editor or a recognized
+12. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
-12. Close QuickType from the tray and start it again to confirm data
+13. Close QuickType from the tray and start it again to confirm data
     persistence.
