@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -70,6 +71,14 @@ HOTKEY_TRANSLATION_KEYS = {
     "alt_shift_space": "hotkey_alt_shift_space",
     "disabled": "hotkey_disabled",
 }
+
+
+class NumericTableWidgetItem(QTableWidgetItem):
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        try:
+            return int(self.text()) < int(other.text())
+        except ValueError:
+            return super().__lt__(other)
 
 
 class EngineSignals(QObject):
@@ -788,7 +797,23 @@ class MainWindow(QMainWindow):
 
         self.export_action = QAction(self)
         self.export_action.triggered.connect(self.export_snippets)
-        toolbar.addAction(self.export_action)
+        self.export_filtered_action = QAction(self)
+        self.export_filtered_action.triggered.connect(
+            self.export_filtered_snippets
+        )
+        self.export_menu = QMenu(self)
+        self.export_menu.addAction(self.export_action)
+        self.export_menu.addAction(self.export_filtered_action)
+        self.export_button = QToolButton()
+        self.export_button.setDefaultAction(self.export_action)
+        self.export_button.setMenu(self.export_menu)
+        self.export_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        )
+        self.export_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        toolbar.addWidget(self.export_button)
 
         self.restore_action = QAction(self)
         self.restore_action.triggered.connect(self.restore_automatic_backup)
@@ -850,6 +875,9 @@ class MainWindow(QMainWindow):
         )
         filters.addWidget(self.category_filter)
         layout.addLayout(filters)
+        self.filter_count_label = QLabel()
+        self.filter_count_label.setProperty("kind", "muted")
+        layout.addWidget(self.filter_count_label)
 
         self.table = QTableWidget(0, 6)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -868,6 +896,8 @@ class MainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(
             self._show_table_context_menu
         )
+        self.table.setSortingEnabled(True)
+        self.table.sortItems(2, Qt.SortOrder.AscendingOrder)
         layout.addWidget(self.table, 1)
 
         self.empty_frame = QFrame()
@@ -985,6 +1015,7 @@ class MainWindow(QMainWindow):
         self.delete_action.setText(self.t("delete"))
         self.import_action.setText(self.t("import"))
         self.export_action.setText(self.t("export"))
+        self.export_filtered_action.setText(self.t("export_filtered"))
         self.restore_action.setText(self.t("restore"))
         self.categories_action.setText(self.t("manage_categories"))
         self.statistics_action.setText(self.t("statistics"))
@@ -1047,6 +1078,10 @@ class MainWindow(QMainWindow):
 
     def _populate_table(self, *, preserve_selection: bool) -> None:
         selected_id = self._current_id if preserve_selection else None
+        sorting_enabled = self.table.isSortingEnabled()
+        sort_column = self.table.horizontalHeader().sortIndicatorSection()
+        sort_order = self.table.horizontalHeader().sortIndicatorOrder()
+        self.table.setSortingEnabled(False)
         with QSignalBlocker(self.table):
             self.table.setRowCount(0)
             for snippet in self.snippets:
@@ -1070,7 +1105,7 @@ class MainWindow(QMainWindow):
                     else self.t("delimiter")
                 )
                 mode.setData(ID_ROLE, snippet.id)
-                usage = QTableWidgetItem(str(snippet.usage_count))
+                usage = NumericTableWidgetItem(str(snippet.usage_count))
                 usage.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 usage.setData(ID_ROLE, snippet.id)
                 self.table.setItem(row, 0, favorite)
@@ -1079,6 +1114,9 @@ class MainWindow(QMainWindow):
                 self.table.setItem(row, 3, category)
                 self.table.setItem(row, 4, mode)
                 self.table.setItem(row, 5, usage)
+        self.table.setSortingEnabled(sorting_enabled)
+        if sorting_enabled and sort_column >= 0:
+            self.table.sortItems(sort_column, sort_order)
         self.apply_filter(self.search_edit.text())
         if selected_id is not None:
             self._select_id(selected_id)
@@ -1087,6 +1125,7 @@ class MainWindow(QMainWindow):
     def apply_filter(self, text: str) -> None:
         needle = text.strip().casefold()
         selected_category = self.category_filter.currentData()
+        visible_count = 0
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 2)
             snippet_id = item.data(ID_ROLE)
@@ -1109,6 +1148,15 @@ class MainWindow(QMainWindow):
             )
             visible = matches_text and matches_category
             self.table.setRowHidden(row, not visible)
+            if visible:
+                visible_count += 1
+        self.filter_count_label.setText(
+            self.t(
+                "filter_count",
+                visible=visible_count,
+                total=len(self.snippets),
+            )
+        )
 
     def _refresh_category_controls(self) -> None:
         categories = sorted(
@@ -1424,9 +1472,45 @@ class MainWindow(QMainWindow):
     def export_snippets(self) -> None:
         if not self._maybe_resolve_dirty():
             return
-        default_name = self.storage.path.parent / (
-            f"QuickType-backup-{datetime.now():%Y%m%d}.json"
+        self._export_snippet_collection(
+            self.storage.list_snippets(),
+            f"QuickType-backup-{datetime.now():%Y%m%d}.json",
         )
+
+    def export_filtered_snippets(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        snippets = self.filtered_snippets()
+        if not snippets:
+            QMessageBox.information(
+                self,
+                self.t("export_filtered"),
+                self.t("no_filtered_snippets"),
+            )
+            return
+        self._export_snippet_collection(
+            snippets,
+            f"QuickType-filtered-{datetime.now():%Y%m%d}.json",
+        )
+
+    def filtered_snippets(self) -> list[Snippet]:
+        by_id = {snippet.id: snippet for snippet in self.snippets}
+        result: list[Snippet] = []
+        for row in range(self.table.rowCount()):
+            if self.table.isRowHidden(row):
+                continue
+            item = self.table.item(row, 2)
+            snippet = by_id.get(item.data(ID_ROLE)) if item else None
+            if snippet is not None:
+                result.append(snippet)
+        return result
+
+    def _export_snippet_collection(
+        self,
+        snippets: list[Snippet],
+        default_filename: str,
+    ) -> None:
+        default_name = self.storage.path.parent / default_filename
         path, _selected_filter = QFileDialog.getSaveFileName(
             self,
             self.t("export_title"),
@@ -1436,7 +1520,6 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            snippets = self.storage.list_snippets()
             export_backup(Path(path), snippets)
         except OSError as error:
             QMessageBox.warning(self, self.t("export_error_title"), str(error))

@@ -23,6 +23,8 @@ All phases planned for the local Windows 11 edition are complete.
   removal of category assignments without deleting snippets.
 - **Usage insights:** total expansion count, ranked snippet usage, last-used
   timestamps, and selective or complete statistics reset.
+- **Library workflows:** sortable columns with numeric usage ordering, live
+  filtered-result counts, and JSON export of the currently visible subset.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 
