@@ -7,7 +7,8 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from quicktype.auto_backup import AutomaticBackupManager
 from quicktype.backup import export_backup, import_backup
@@ -15,6 +16,7 @@ from quicktype.backup_catalog import BackupKind
 from quicktype.i18n import Translator
 from quicktype.importing import ImportMode, analyze_import
 from quicktype.models import Snippet, TriggerMode
+from quicktype.recovery import RestoreChangeKind
 from quicktype.storage import Storage
 from quicktype.ui import (
     BackupRestoreDialog,
@@ -250,6 +252,12 @@ def test_backup_restore_dialog_lists_and_filters_all_backup_types(
     storage.save_snippet(
         Snippet(None, "sig", "Regards", TriggerMode.DELIMITER)
     )
+    storage.save_snippet(
+        Snippet(None, "local", "Local only", TriggerMode.IMMEDIATE)
+    )
+    storage.save_snippet(
+        Snippet(None, "same", "Same text", TriggerMode.IMMEDIATE)
+    )
     manager = AutomaticBackupManager(storage)
     backup = manager.create_if_changed()
     assert backup is not None
@@ -269,6 +277,7 @@ def test_backup_restore_dialog_lists_and_filters_all_backup_types(
         [
             Snippet(None, "sig", "Changed regards", TriggerMode.DELIMITER),
             Snippet(None, "new", "New text", TriggerMode.IMMEDIATE),
+            Snippet(None, "same", "Same text", TriggerMode.IMMEDIATE),
         ],
     )
 
@@ -286,16 +295,83 @@ def test_backup_restore_dialog_lists_and_filters_all_backup_types(
     ]
     assert len(visible_rows) == 1
     assert dialog.table.item(visible_rows[0], 1).text() == "Before import"
-    assert dialog.table.item(visible_rows[0], 2).text() == "2"
+    assert dialog.table.item(visible_rows[0], 2).text() == "3"
     assert dialog.selected_path == before_import
     assert dialog.selected_analysis is not None
     assert dialog.selected_analysis.added == 1
     assert dialog.selected_analysis.updated == 1
-    assert dialog.selected_analysis.removed == 0
-    assert dialog.selected_analysis.unchanged == 0
+    assert dialog.selected_analysis.removed == 1
+    assert dialog.selected_analysis.unchanged == 1
     assert dialog.impact_label.text() == (
-        "Added: 1 · changed: 1 · removed: 0 · unchanged: 0"
+        "Added: 1 · changed: 1 · removed: 1 · unchanged: 1"
     )
+    dialog.change_filter.setCurrentIndex(
+        dialog.change_filter.findData(RestoreChangeKind.CHANGED.value)
+    )
+    assert dialog.change_table.rowCount() == 1
+    assert dialog.change_table.item(0, 0).text() == "Changed"
+    assert dialog.change_table.item(0, 1).text() == "sig"
+    assert dialog.change_table.item(0, 2).text() == "expansion"
+    assert dialog.change_table.item(0, 3).text() == "Regards"
+    assert dialog.change_table.item(0, 4).text() == "Changed regards"
+    dialog.copy_restore_report()
+    report = QApplication.clipboard().text()
+    assert "QuickType — restore report" in report
+    assert "[Added] new" in report
+    assert "[Changed] sig — expansion" in report
+    assert "[Removed] local" in report
+    assert "[Unchanged] same" in report
+
+    dialog.deleteLater()
+    application.processEvents()
+
+
+def test_backup_dialog_refreshes_opens_folder_and_deletes_selected_backup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "QuickTypeData" / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(None, "sig", "Regards", TriggerMode.DELIMITER)
+    )
+    manager = AutomaticBackupManager(storage)
+    first = manager.directory / (
+        "QuickType-manual-20260729-120000-000001.json"
+    )
+    second = manager.directory / (
+        "QuickType-manual-20260729-120001-000001.json"
+    )
+    export_backup(first, storage.list_snippets())
+    dialog = BackupRestoreDialog(storage, Translator("en"))
+    assert dialog.table.rowCount() == 1
+
+    export_backup(second, storage.list_snippets())
+    dialog.refresh_button.click()
+    assert dialog.table.rowCount() == 2
+    assert dialog.action_label.text() == "Backup catalog refreshed."
+
+    opened_urls = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url) or True,
+    )
+    dialog.open_folder_button.click()
+    assert Path(opened_urls[0].toLocalFile()) == manager.directory
+
+    selected = dialog.selected_path
+    assert selected is not None
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    dialog.delete_backup_button.click()
+    assert not selected.exists()
+    assert dialog.table.rowCount() == 1
+    assert dialog.action_label.text() == f'Deleted backup “{selected.name}”.'
 
     dialog.deleteLater()
     application.processEvents()

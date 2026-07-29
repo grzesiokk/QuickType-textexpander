@@ -154,6 +154,12 @@ to both typed abbreviations and the quick-access picker.
 - Selecting a backup shows a read-only restore impact summary: snippets that
   will be added, changed, removed, or left unchanged. The same counts are
   repeated in the final confirmation before any data is modified.
+- The difference table can be filtered by action and compares the current and
+  backup expansions. Changed snippets also identify the exact fields that
+  differ, including trigger mode, category, application rules, and statistics.
+- Use **Copy report** to place the complete localized difference report on the
+  clipboard. The browser can also refresh the catalog, open the backup folder,
+  and permanently delete a selected backup after explicit confirmation.
 - Before restoring any listed backup, QuickType saves an additional
   `QuickType-before-restore-*.json` safety copy of the current state.
 - **Import** first shows how many snippets are new and lists every abbreviation

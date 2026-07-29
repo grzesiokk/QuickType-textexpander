@@ -7,7 +7,11 @@ import pytest
 
 from quicktype.backup import BackupFormatError, export_backup, import_backup
 from quicktype.models import Snippet, TriggerMode
-from quicktype.recovery import analyze_restore, restore_backup
+from quicktype.recovery import (
+    RestoreChangeKind,
+    analyze_restore,
+    restore_backup,
+)
 from quicktype.storage import Storage
 
 
@@ -86,7 +90,11 @@ def test_restore_analysis_counts_library_changes_without_timestamp_noise(
                 "changed",
                 "New text",
                 current["changed"].trigger_mode,
-                enabled=current["changed"].enabled,
+                enabled=False,
+                usage_count=2,
+                category="Updated",
+                favorite=True,
+                applications=("Code.exe",),
             ),
             Snippet(None, "added", "Backup only", TriggerMode.IMMEDIATE),
         ],
@@ -100,6 +108,20 @@ def test_restore_analysis_counts_library_changes_without_timestamp_noise(
     assert analysis.updated == 1
     assert analysis.removed == 1
     assert analysis.unchanged == 1
+    changes = {change.abbreviation: change for change in analysis.changes}
+    assert changes["added"].kind == RestoreChangeKind.ADDED
+    assert changes["changed"].kind == RestoreChangeKind.CHANGED
+    assert changes["changed"].changed_fields == (
+        "expansion",
+        "enabled",
+        "usage_count",
+        "category",
+        "favorite",
+        "applications",
+    )
+    assert changes["removed"].kind == RestoreChangeKind.REMOVED
+    assert changes["same"].kind == RestoreChangeKind.UNCHANGED
+    assert changes["same"].changed_fields == ()
 
 
 def test_invalid_restore_does_not_change_data_or_write_safety_copy(

@@ -60,7 +60,10 @@ Before publishing a release:
    before-restore entries show the correct type, date, file name, and snippet
    count. Filter every type and verify that selecting a backup shows accurate
    added, changed, removed, and unchanged counts. Confirm that the same impact
-   appears in the final prompt, restore a safety copy, and verify the previous
+   appears in the final prompt. Filter the per-snippet difference table, inspect
+   the changed-field names and both expansion columns, and copy the report to
+   the clipboard. Refresh the catalog, open its folder, and delete a disposable
+   backup after confirmation. Restore a safety copy and verify the previous
    state is saved as a new `QuickType-before-restore-*.json`.
 17. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.

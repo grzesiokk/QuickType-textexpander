@@ -51,7 +51,11 @@ from PySide6.QtWidgets import (
 )
 
 from .backup import BackupFormatError, export_backup
-from .backup_catalog import BackupKind, list_backup_entries
+from .backup_catalog import (
+    BackupKind,
+    delete_backup_file,
+    list_backup_entries,
+)
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .hotkeys import (
     CLIPBOARD_CAPTURE_HOTKEY_SPECS,
@@ -82,7 +86,13 @@ from .models import (
     validate_abbreviation,
     validate_category,
 )
-from .recovery import RestoreAnalysis, analyze_restore, restore_backup
+from .recovery import (
+    RestoreAnalysis,
+    RestoreChange,
+    RestoreChangeKind,
+    analyze_restore,
+    restore_backup,
+)
 from .storage import DuplicateAbbreviationError, Storage
 from .template_engine import TemplateIssue, inspect_template, render_template
 from .windows_platform import process_name_from_window
@@ -419,11 +429,12 @@ class BackupRestoreDialog(QDialog):
         super().__init__(parent)
         self.t = translator
         self.storage = storage
-        self.entries = list_backup_entries(storage.path.parent / "Backups")
+        self.backup_directory = storage.path.parent / "Backups"
+        self.entries = []
         self._analysis_cache: dict[Path, RestoreAnalysis] = {}
         self._selected_analysis: RestoreAnalysis | None = None
         self.setModal(True)
-        self.resize(820, 475)
+        self.resize(1040, 720)
         self.setWindowTitle(self.t("restore_backup_title"))
 
         layout = QVBoxLayout(self)
@@ -444,6 +455,18 @@ class BackupRestoreDialog(QDialog):
             self.apply_type_filter
         )
         filters.addWidget(self.type_filter)
+        filters.addWidget(QLabel(self.t("restore_change_filter")))
+        self.change_filter = QComboBox()
+        self.change_filter.addItem(self.t("restore_change_all"), None)
+        for kind in RestoreChangeKind:
+            self.change_filter.addItem(
+                self.t(f"restore_change_{kind.value}"),
+                kind.value,
+            )
+        self.change_filter.currentIndexChanged.connect(
+            self.apply_change_filter
+        )
+        filters.addWidget(self.change_filter)
         filters.addStretch(1)
         layout.addLayout(filters)
 
@@ -466,34 +489,6 @@ class BackupRestoreDialog(QDialog):
         self.table.setColumnWidth(0, 155)
         self.table.setColumnWidth(1, 145)
         self.table.setColumnWidth(2, 90)
-        for entry in self.entries:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            date_item = QTableWidgetItem(
-                entry.modified_at.strftime("%Y-%m-%d %H:%M:%S")
-            )
-            date_item.setData(ID_ROLE, str(entry.path))
-            date_item.setData(BACKUP_KIND_ROLE, entry.kind.value)
-            self.table.setItem(row, 0, date_item)
-            self.table.setItem(
-                row,
-                1,
-                QTableWidgetItem(
-                    self.t(f"backup_type_{entry.kind.value}")
-                ),
-            )
-            self.table.setItem(
-                row,
-                2,
-                QTableWidgetItem(str(entry.snippet_count)),
-            )
-            self.table.setItem(
-                row,
-                3,
-                QTableWidgetItem(entry.path.name),
-            )
-        if self.table.rowCount():
-            self.table.selectRow(0)
         layout.addWidget(self.table, 1)
 
         self.empty_label = QLabel(self.t("no_backups"))
@@ -506,24 +501,89 @@ class BackupRestoreDialog(QDialog):
         self.impact_label.setProperty("kind", "muted")
         layout.addWidget(self.impact_label)
 
+        self.change_table = QTableWidget(0, 5)
+        self.change_table.setHorizontalHeaderLabels(
+            [
+                self.t("restore_action_column"),
+                self.t("shortcut_column"),
+                self.t("restore_fields_column"),
+                self.t("restore_current_column"),
+                self.t("restore_backup_column"),
+            ]
+        )
+        self.change_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.change_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.change_table.verticalHeader().hide()
+        self.change_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.change_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.change_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.Stretch
+        )
+        self.change_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.Stretch
+        )
+        self.change_table.setColumnWidth(2, 210)
+        layout.addWidget(self.change_table, 1)
+
+        self.no_changes_label = QLabel(self.t("restore_no_changes"))
+        self.no_changes_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.no_changes_label.setVisible(False)
+        layout.addWidget(self.no_changes_label)
+
+        self.action_label = QLabel()
+        self.action_label.setWordWrap(True)
+        self.action_label.setProperty("kind", "muted")
+        layout.addWidget(self.action_label)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
         )
+        self.refresh_button = buttons.addButton(
+            self.t("refresh_backups"),
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.open_folder_button = buttons.addButton(
+            self.t("open_backup_folder"),
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.copy_report_button = buttons.addButton(
+            self.t("copy_restore_report"),
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.delete_backup_button = buttons.addButton(
+            self.t("delete_backup"),
+            QDialogButtonBox.ButtonRole.DestructiveRole,
+        )
         self.restore_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.restore_button.setText(self.t("restore"))
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
+            self.t("cancel")
+        )
         self.table.itemSelectionChanged.connect(self._update_selection)
-        self._update_selection()
+        self.refresh_button.clicked.connect(self.refresh_entries)
+        self.open_folder_button.clicked.connect(self.open_backup_folder)
+        self.copy_report_button.clicked.connect(self.copy_restore_report)
+        self.delete_backup_button.clicked.connect(self.delete_selected_backup)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.refresh_entries(show_status=False)
 
     @property
     def selected_path(self) -> Path | None:
-        selected = self.table.selectedItems()
-        if not selected:
+        row = self.table.currentRow()
+        if row < 0 or self.table.isRowHidden(row):
             return None
-        value = selected[0].data(ID_ROLE)
+        value = self.table.item(row, 0).data(ID_ROLE)
         return Path(str(value)) if value else None
 
     @property
@@ -531,26 +591,84 @@ class BackupRestoreDialog(QDialog):
         return self._selected_analysis
 
     def apply_type_filter(self) -> None:
+        preferred_path = self.selected_path
         selected_kind = self.type_filter.currentData()
         first_visible: int | None = None
+        preferred_row: int | None = None
         for row in range(self.table.rowCount()):
             kind = self.table.item(row, 0).data(BACKUP_KIND_ROLE)
             visible = selected_kind is None or kind == selected_kind
             self.table.setRowHidden(row, not visible)
             if visible and first_visible is None:
                 first_visible = row
-        self.table.clearSelection()
-        if first_visible is not None:
-            self.table.selectRow(first_visible)
+            row_path = Path(str(self.table.item(row, 0).data(ID_ROLE)))
+            if visible and row_path == preferred_path:
+                preferred_row = row
+        with QSignalBlocker(self.table):
+            self.table.clearSelection()
+            target_row = (
+                preferred_row
+                if preferred_row is not None
+                else first_visible
+            )
+            if target_row is not None:
+                self.table.selectRow(target_row)
         self.empty_label.setVisible(first_visible is None)
         self._update_selection()
+
+    def apply_change_filter(self) -> None:
+        self._populate_change_table(self._selected_analysis)
+
+    def refresh_entries(self, *, show_status: bool = True) -> None:
+        preferred_path = self.selected_path
+        self._analysis_cache.clear()
+        self.entries = list_backup_entries(self.backup_directory)
+        with QSignalBlocker(self.table):
+            self.table.setRowCount(0)
+            for entry in self.entries:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                date_item = QTableWidgetItem(
+                    entry.modified_at.strftime("%Y-%m-%d %H:%M:%S")
+                )
+                date_item.setData(ID_ROLE, str(entry.path))
+                date_item.setData(BACKUP_KIND_ROLE, entry.kind.value)
+                self.table.setItem(row, 0, date_item)
+                self.table.setItem(
+                    row,
+                    1,
+                    QTableWidgetItem(
+                        self.t(f"backup_type_{entry.kind.value}")
+                    ),
+                )
+                self.table.setItem(
+                    row,
+                    2,
+                    QTableWidgetItem(str(entry.snippet_count)),
+                )
+                self.table.setItem(
+                    row,
+                    3,
+                    QTableWidgetItem(entry.path.name),
+                )
+                if entry.path == preferred_path:
+                    self.table.selectRow(row)
+        self.apply_type_filter()
+        if show_status:
+            self.action_label.setText(self.t("backups_refreshed"))
+            self._set_label_kind(self.action_label, "success")
 
     def _update_selection(self) -> None:
         path = self.selected_path
         self._selected_analysis = None
+        self.action_label.clear()
+        self._set_label_kind(self.action_label, "muted")
         if path is None:
             self.impact_label.clear()
+            self._populate_change_table(None)
             self.restore_button.setEnabled(False)
+            self.delete_backup_button.setEnabled(False)
+            self.copy_report_button.setEnabled(False)
             return
         try:
             analysis = self._analysis_cache.get(path)
@@ -561,6 +679,9 @@ class BackupRestoreDialog(QDialog):
             self.impact_label.setText(self.t("restore_analysis_error"))
             self._set_impact_kind("error")
             self.restore_button.setEnabled(False)
+            self.delete_backup_button.setEnabled(True)
+            self.copy_report_button.setEnabled(False)
+            self._populate_change_table(None)
             return
         self._selected_analysis = analysis
         self.impact_label.setText(
@@ -573,12 +694,159 @@ class BackupRestoreDialog(QDialog):
             )
         )
         self._set_impact_kind("warning" if analysis.removed else "muted")
+        self._populate_change_table(analysis)
         self.restore_button.setEnabled(True)
+        self.delete_backup_button.setEnabled(True)
+        self.copy_report_button.setEnabled(True)
 
     def _set_impact_kind(self, kind: str) -> None:
-        self.impact_label.setProperty("kind", kind)
-        self.impact_label.style().unpolish(self.impact_label)
-        self.impact_label.style().polish(self.impact_label)
+        self._set_label_kind(self.impact_label, kind)
+
+    @staticmethod
+    def _set_label_kind(label: QLabel, kind: str) -> None:
+        label.setProperty("kind", kind)
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def _populate_change_table(
+        self,
+        analysis: RestoreAnalysis | None,
+    ) -> None:
+        selected_kind = self.change_filter.currentData()
+        self.change_table.setRowCount(0)
+        if analysis is None:
+            self.no_changes_label.setVisible(False)
+            return
+        for change in analysis.changes:
+            if selected_kind is not None and change.kind.value != selected_kind:
+                continue
+            self._append_change_row(change)
+        self.no_changes_label.setVisible(self.change_table.rowCount() == 0)
+
+    def _append_change_row(self, change: RestoreChange) -> None:
+        row = self.change_table.rowCount()
+        self.change_table.insertRow(row)
+        current_text = change.current.expansion if change.current else None
+        incoming_text = change.incoming.expansion if change.incoming else None
+        fields = ", ".join(
+            self.t(f"restore_field_{field}")
+            for field in change.changed_fields
+        )
+        self.change_table.setItem(
+            row,
+            0,
+            QTableWidgetItem(self.t(f"restore_change_{change.kind.value}")),
+        )
+        self.change_table.setItem(
+            row,
+            1,
+            QTableWidgetItem(change.abbreviation),
+        )
+        self.change_table.setItem(
+            row,
+            2,
+            QTableWidgetItem(fields or "—"),
+        )
+        current_item = QTableWidgetItem(self._expansion_preview(current_text))
+        incoming_item = QTableWidgetItem(self._expansion_preview(incoming_text))
+        current_item.setToolTip(current_text or "")
+        incoming_item.setToolTip(incoming_text or "")
+        self.change_table.setItem(row, 3, current_item)
+        self.change_table.setItem(row, 4, incoming_item)
+
+    @staticmethod
+    def _expansion_preview(value: str | None, limit: int = 160) -> str:
+        if value is None:
+            return "—"
+        preview = value.replace("\r\n", "\n").replace("\r", "\n")
+        preview = " ↵ ".join(preview.split("\n"))
+        if len(preview) <= limit:
+            return preview
+        return preview[: limit - 1] + "…"
+
+    def copy_restore_report(self) -> None:
+        analysis = self._selected_analysis
+        if analysis is None:
+            return
+        lines = [
+            self.t(
+                "restore_report_header",
+                file=analysis.source.name,
+            ),
+            self.t(
+                "restore_impact",
+                added=analysis.added,
+                updated=analysis.updated,
+                removed=analysis.removed,
+                unchanged=analysis.unchanged,
+            ),
+            "",
+        ]
+        for change in analysis.changes:
+            fields = ", ".join(
+                self.t(f"restore_field_{field}")
+                for field in change.changed_fields
+            )
+            lines.append(
+                self.t(
+                    "restore_report_line",
+                    action=self.t(f"restore_change_{change.kind.value}"),
+                    abbreviation=change.abbreviation,
+                    fields=f" — {fields}" if fields else "",
+                )
+            )
+        QApplication.clipboard().setText("\n".join(lines))
+        self.action_label.setText(self.t("restore_report_copied"))
+        self._set_label_kind(self.action_label, "success")
+
+    def open_backup_folder(self) -> None:
+        try:
+            self.backup_directory.mkdir(parents=True, exist_ok=True)
+            opened = QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(self.backup_directory))
+            )
+        except OSError as error:
+            opened = False
+            details = str(error)
+        else:
+            details = str(self.backup_directory)
+        if opened:
+            self.action_label.setText(
+                self.t("backup_folder_opened", path=details)
+            )
+            self._set_label_kind(self.action_label, "success")
+        else:
+            self.action_label.setText(
+                self.t("open_backup_folder_error", error=details)
+            )
+            self._set_label_kind(self.action_label, "error")
+
+    def delete_selected_backup(self) -> None:
+        path = self.selected_path
+        if path is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            self.t("delete_backup_title"),
+            self.t("delete_backup_text", file=path.name),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_backup_file(self.backup_directory, path)
+        except (OSError, ValueError) as error:
+            self.action_label.setText(
+                self.t("delete_backup_error", error=str(error))
+            )
+            self._set_label_kind(self.action_label, "error")
+            return
+        self.refresh_entries(show_status=False)
+        self.action_label.setText(
+            self.t("backup_deleted", file=path.name)
+        )
+        self._set_label_kind(self.action_label, "success")
 
 
 class ImportPreviewDialog(QDialog):
