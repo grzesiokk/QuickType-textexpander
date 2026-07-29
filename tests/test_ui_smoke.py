@@ -394,3 +394,57 @@ def test_data_maintenance_dialog_creates_backup_and_checks_database(
 
     dialog.deleteLater()
     application.processEvents()
+
+
+def test_keyboard_filter_helpers_and_rendered_copy(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(
+            None,
+            "sig",
+            "Hello {{clipboard}}{{cursor}}",
+            TriggerMode.DELIMITER,
+            category="Work",
+        )
+    )
+    storage.save_snippet(
+        Snippet(None, "home", "Home", TriggerMode.IMMEDIATE, category="Home")
+    )
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+    window.show()
+    application.processEvents()
+
+    window.search_edit.setText("sig")
+    window.category_filter.setCurrentIndex(
+        window.category_filter.findData("Work")
+    )
+    assert window.filter_count_label.text() == "Visible: 1 of 2"
+    window.clear_filters()
+    assert window.search_edit.text() == ""
+    assert window.category_filter.currentData() is None
+    assert window.filter_count_label.text() == "Visible: 2 of 2"
+    assert window.search_edit.hasFocus()
+
+    window._select_id(
+        next(snippet.id for snippet in window.snippets if snippet.abbreviation == "sig")
+    )
+    QApplication.clipboard().setText("CLIP")
+    window.copy_preview()
+    assert QApplication.clipboard().text() == "Hello CLIP"
+    assert window.status_message.text() == "Copied the rendered preview."
+
+    QApplication.clipboard().setText("AGAIN")
+    window.copy_current_rendered()
+    assert QApplication.clipboard().text() == "Hello AGAIN"
+    assert "sig" in window.status_message.text()
+
+    window.close()
+    window.deleteLater()
+    application.processEvents()

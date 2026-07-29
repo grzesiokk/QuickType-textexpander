@@ -981,6 +981,12 @@ class MainWindow(QMainWindow):
 
         save_shortcut = QShortcut(QKeySequence.StandardKey.Save, self)
         save_shortcut.activated.connect(self.save_current)
+        find_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        find_shortcut.activated.connect(self.focus_search)
+        clear_filters_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        clear_filters_shortcut.activated.connect(self.clear_filters)
+        copy_preview_shortcut = QShortcut(QKeySequence("Ctrl+Shift+C"), self)
+        copy_preview_shortcut.activated.connect(self.copy_preview)
 
     def _build_list_panel(self) -> QWidget:
         panel = QWidget()
@@ -1117,6 +1123,12 @@ class MainWindow(QMainWindow):
         self.preview_edit.setReadOnly(True)
         self.preview_edit.setMaximumHeight(125)
         preview_layout.addWidget(self.preview_edit)
+        preview_actions = QHBoxLayout()
+        preview_actions.addStretch(1)
+        self.copy_preview_button = QPushButton()
+        self.copy_preview_button.clicked.connect(self.copy_preview)
+        preview_actions.addWidget(self.copy_preview_button)
+        preview_layout.addLayout(preview_actions)
         layout.addWidget(self.preview_group)
 
         buttons = QHBoxLayout()
@@ -1146,6 +1158,7 @@ class MainWindow(QMainWindow):
         self.active_action.setText(self.t("engine_active"))
         self.settings_action.setText(self.t("settings"))
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
+        self.search_edit.setToolTip(self.t("search_tooltip"))
         self.table.setHorizontalHeaderLabels(
             [
                 self.t("favorite_column"),
@@ -1178,6 +1191,8 @@ class MainWindow(QMainWindow):
         for token, button in self.variable_buttons.items():
             button.setText(self.t(token))
         self.preview_group.setTitle(self.t("preview"))
+        self.copy_preview_button.setText(self.t("copy_rendered"))
+        self.copy_preview_button.setToolTip(self.t("copy_rendered_tooltip"))
         self.cancel_button.setText(self.t("cancel"))
         self.save_button.setText(self.t("save"))
         self.status_state.setText(
@@ -1281,6 +1296,26 @@ class MainWindow(QMainWindow):
                 total=len(self.snippets),
             )
         )
+
+    def focus_search(self) -> None:
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
+
+    def clear_filters(self) -> None:
+        had_filter = bool(self.search_edit.text()) or (
+            self.category_filter.currentData() is not None
+        )
+        if not had_filter:
+            return
+        with (
+            QSignalBlocker(self.search_edit),
+            QSignalBlocker(self.category_filter),
+        ):
+            self.search_edit.clear()
+            self.category_filter.setCurrentIndex(0)
+        self.apply_filter("")
+        self.focus_search()
+        self.status_message.setText(self.t("filters_cleared"))
 
     def _refresh_category_controls(self) -> None:
         categories = sorted(
@@ -1547,6 +1582,7 @@ class MainWindow(QMainWindow):
             self.t("remove_favorite") if source.favorite else self.t("add_favorite")
         )
         menu.addSeparator()
+        copy_action = menu.addAction(self.t("copy_rendered"))
         duplicate_action = menu.addAction(self.t("duplicate"))
         delete_action = menu.addAction(self.t("delete"))
         selected = menu.exec(self.table.viewport().mapToGlobal(position))
@@ -1554,6 +1590,8 @@ class MainWindow(QMainWindow):
             self.toggle_current_enabled()
         elif selected == favorite_action:
             self.toggle_current_favorite()
+        elif selected == copy_action:
+            self.copy_snippet_rendered(source)
         elif selected == duplicate_action:
             self.duplicate_current()
         elif selected == delete_action:
@@ -1781,6 +1819,39 @@ class MainWindow(QMainWindow):
         cursor.insertText("{{" + name + "}}")
         self.expansion_edit.setTextCursor(cursor)
         self.expansion_edit.setFocus()
+
+    def copy_preview(self) -> None:
+        if not self.editor_panel.isEnabled():
+            return
+        self._copy_rendered_text(
+            self.expansion_edit.toPlainText(),
+            self.t("preview_copied"),
+        )
+
+    def copy_current_rendered(self) -> None:
+        if self._current_id is None:
+            return
+        snippet = next(
+            (entry for entry in self.snippets if entry.id == self._current_id),
+            None,
+        )
+        if snippet is not None:
+            self.copy_snippet_rendered(snippet)
+
+    def copy_snippet_rendered(self, snippet: Snippet) -> None:
+        self._copy_rendered_text(
+            snippet.expansion,
+            self.t("snippet_copied", abbr=snippet.abbreviation),
+        )
+
+    def _copy_rendered_text(self, template: str, message: str) -> None:
+        clipboard = QApplication.clipboard()
+        rendered = render_template(
+            template,
+            clipboard_text=clipboard.text(),
+        )
+        clipboard.setText(rendered.text)
+        self.status_message.setText(message)
 
     def _editor_changed(self, *_args: object) -> None:
         if self._selection_guard:

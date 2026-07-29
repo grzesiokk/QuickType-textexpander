@@ -27,6 +27,8 @@ All phases planned for the local Windows 11 edition are complete.
   filtered-result counts, and JSON export of the currently visible subset.
 - **Data maintenance:** on-demand manual backups, SQLite integrity checks, data
   size and backup counts, and direct access to the portable data folder.
+- **Keyboard and clipboard workflow:** search focus and filter-clearing
+  shortcuts plus rendered-copy actions for the editor and snippet context menu.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 
