@@ -59,6 +59,7 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
+from .importing import ImportAnalysis, analyze_import, apply_import
 from .maintenance import (
     collect_data_summary,
     create_manual_backup,
@@ -442,6 +443,94 @@ class BackupRestoreDialog(QDialog):
             return None
         value = selected[0].data(ID_ROLE)
         return Path(str(value)) if value else None
+
+
+class ImportPreviewDialog(QDialog):
+    def __init__(
+        self,
+        analysis: ImportAnalysis,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.analysis = analysis
+        self.t = translator
+        self.setModal(True)
+        self.resize(620, 420)
+        self.setWindowTitle(self.t("import_preview_title"))
+
+        layout = QVBoxLayout(self)
+        file_label = QLabel(
+            self.t("import_preview_file", file=analysis.source.name)
+        )
+        file_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(file_label)
+
+        summary = QLabel(
+            self.t(
+                "import_preview_summary",
+                incoming=analysis.incoming_count,
+                new=analysis.new_count,
+                conflicts=len(analysis.conflicts),
+            )
+        )
+        summary.setWordWrap(True)
+        summary.setProperty("kind", "emptyTitle")
+        layout.addWidget(summary)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem(self.t("import_merge_mode"), False)
+        self.mode_combo.addItem(self.t("import_replace_mode"), True)
+        layout.addWidget(self.mode_combo)
+
+        conflict_label = QLabel(self.t("import_conflicts"))
+        layout.addWidget(conflict_label)
+        self.conflict_table = QTableWidget(0, 1)
+        self.conflict_table.setHorizontalHeaderLabels(
+            [self.t("shortcut_column")]
+        )
+        self.conflict_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.conflict_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.conflict_table.verticalHeader().hide()
+        for abbreviation in analysis.conflicts:
+            row = self.conflict_table.rowCount()
+            self.conflict_table.insertRow(row)
+            self.conflict_table.setItem(
+                row, 0, QTableWidgetItem(abbreviation)
+            )
+        self.conflict_table.setVisible(bool(analysis.conflicts))
+        layout.addWidget(self.conflict_table, 1)
+
+        no_conflicts = QLabel(self.t("import_no_conflicts"))
+        no_conflicts.setVisible(not analysis.conflicts)
+        no_conflicts.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(no_conflicts)
+
+        warning = QLabel(self.t("import_safety_copy_info"))
+        warning.setWordWrap(True)
+        warning.setProperty("kind", "warning")
+        layout.addWidget(warning)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+            self.t("import")
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @property
+    def replace_existing(self) -> bool:
+        return bool(self.mode_combo.currentData())
 
 
 class CategoryManagerDialog(QDialog):
@@ -1701,24 +1790,21 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        choice = QMessageBox.question(
-            self,
-            self.t("import_choice_title"),
-            self.t("import_choice_text"),
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.No,
-        )
-        if choice == QMessageBox.StandardButton.Cancel:
+        try:
+            analysis = analyze_import(self.storage, Path(path))
+        except (OSError, ValueError, BackupFormatError) as error:
+            QMessageBox.warning(self, self.t("import_error_title"), str(error))
+            return
+        dialog = ImportPreviewDialog(analysis, self.t, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            snippets = import_backup(Path(path))
-            added, skipped = self.storage.import_snippets(
-                snippets,
-                replace=choice == QMessageBox.StandardButton.Yes,
+            result = apply_import(
+                self.storage,
+                analysis,
+                replace=dialog.replace_existing,
             )
-        except (OSError, ValueError, BackupFormatError) as error:
+        except (OSError, ValueError) as error:
             QMessageBox.warning(self, self.t("import_error_title"), str(error))
             return
         self._current_id = None
@@ -1727,7 +1813,12 @@ class MainWindow(QMainWindow):
         self.reload_snippets()
         self.snippets_changed.emit()
         self.status_message.setText(
-            self.t("import_success", added=added, skipped=skipped)
+            self.t(
+                "import_success_with_safety",
+                added=result.added,
+                skipped=result.skipped,
+                safety=result.safety_copy.name,
+            )
         )
 
     def restore_automatic_backup(self) -> None:

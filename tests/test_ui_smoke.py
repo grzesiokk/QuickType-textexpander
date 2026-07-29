@@ -10,19 +10,51 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from quicktype.auto_backup import AutomaticBackupManager
-from quicktype.backup import import_backup
+from quicktype.backup import export_backup, import_backup
 from quicktype.i18n import Translator
+from quicktype.importing import analyze_import
 from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
 from quicktype.ui import (
     BackupRestoreDialog,
     CategoryManagerDialog,
     DataMaintenanceDialog,
+    ImportPreviewDialog,
     MainWindow,
     QuickAccessDialog,
     SettingsDialog,
     StatisticsDialog,
 )
+
+
+def test_import_preview_shows_conflicts_and_mode_choice(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(None, "keep", "Current", TriggerMode.IMMEDIATE)
+    )
+    source = tmp_path / "incoming.json"
+    export_backup(
+        source,
+        [
+            Snippet(None, "keep", "Conflict", TriggerMode.IMMEDIATE),
+            Snippet(None, "new", "New", TriggerMode.DELIMITER),
+        ],
+    )
+    dialog = ImportPreviewDialog(
+        analyze_import(storage, source),
+        Translator("en"),
+    )
+
+    assert dialog.conflict_table.rowCount() == 1
+    assert dialog.conflict_table.item(0, 0).text() == "keep"
+    assert not dialog.replace_existing
+    dialog.mode_combo.setCurrentIndex(1)
+    assert dialog.replace_existing
+
+    dialog.deleteLater()
+    application.processEvents()
 
 
 def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path) -> None:
