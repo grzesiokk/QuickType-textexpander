@@ -30,13 +30,25 @@ try {
     }
 
     Start-Process -FilePath $ResolvedExecutable -ArgumentList "--minimized"
-    Start-Sleep -Seconds 5
-    $SecondProcesses = @(
-        Get-Process -Name "QuickType" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Path -eq $ResolvedExecutable }
+    $SecondProcesses = @()
+    $SecondInstanceTimeout = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        Start-Sleep -Seconds 1
+        $SecondProcesses = @(
+            Get-Process -Name "QuickType" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $ResolvedExecutable }
+        )
+    } while (
+        $SecondProcesses.Count -gt $FirstProcesses.Count -and
+        $SecondInstanceTimeout.Elapsed.TotalSeconds -lt 30
     )
     if ($SecondProcesses.Count -ne $FirstProcesses.Count) {
-        throw "A second QuickType instance remained running."
+        $ProcessIds = ($SecondProcesses.Id | Sort-Object) -join ", "
+        throw (
+            "A second QuickType instance remained running. " +
+            "Expected $($FirstProcesses.Count) process(es), found " +
+            "$($SecondProcesses.Count); PIDs: $ProcessIds."
+        )
     }
     Write-Host "Portable database and single-instance smoke test passed."
 }
