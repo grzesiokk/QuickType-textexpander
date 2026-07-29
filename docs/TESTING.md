@@ -56,8 +56,10 @@ Before publishing a release:
    all remaining counters after their confirmation prompts.
 15. Open Data maintenance, create a manual backup, run the database integrity
    check, and open the data folder in Windows Explorer.
-16. Restore an automatic backup and confirm that the previous state is saved as
-   `QuickType-before-restore-*.json`.
+16. Open Backups and verify automatic, manual, before-import, and
+   before-restore entries show the correct type, date, file name, and snippet
+   count. Filter every type, restore a safety copy, and confirm the previous
+   state is saved as a new `QuickType-before-restore-*.json`.
 17. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
 18. Confirm that expansion does not run in QuickType's editor or a recognized

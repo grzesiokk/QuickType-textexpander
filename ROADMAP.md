@@ -17,6 +17,8 @@ All phases planned for the local Windows 11 edition are complete.
 - **Reliability:** transactional SQLite storage, schema migrations, atomic JSON
   backups, rotating automatic backups, an in-app recovery browser, and a safety
   copy created before every restore.
+- **Backup catalog:** one filtered recovery browser for automatic, manual,
+  before-import, before-restore, and other valid local QuickType backups.
 - **Safe import:** preflight snippet and conflict counts, an exact conflict
   list, explicit merge, update, or replace modes, and a safety copy before
   every import.

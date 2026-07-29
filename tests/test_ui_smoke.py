@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 
 from quicktype.auto_backup import AutomaticBackupManager
 from quicktype.backup import export_backup, import_backup
+from quicktype.backup_catalog import BackupKind
 from quicktype.i18n import Translator
 from quicktype.importing import ImportMode, analyze_import
 from quicktype.models import Snippet, TriggerMode
@@ -240,7 +241,7 @@ def test_main_window_toggles_enabled_and_favorite_state(tmp_path: Path) -> None:
     application.processEvents()
 
 
-def test_backup_restore_dialog_lists_newest_automatic_backup(
+def test_backup_restore_dialog_lists_and_filters_all_backup_types(
     tmp_path: Path,
 ) -> None:
     application = QApplication.instance() or QApplication([])
@@ -252,13 +253,37 @@ def test_backup_restore_dialog_lists_newest_automatic_backup(
     manager = AutomaticBackupManager(storage)
     backup = manager.create_if_changed()
     assert backup is not None
+    manual = manager.directory / (
+        "QuickType-manual-20260729-120000-000001.json"
+    )
+    before_import = manager.directory / (
+        "QuickType-before-import-20260729-120001-000001.json"
+    )
+    before_restore = manager.directory / (
+        "QuickType-before-restore-20260729-120002-000001.json"
+    )
+    for path in (manual, before_import, before_restore):
+        export_backup(path, storage.list_snippets())
 
     dialog = BackupRestoreDialog(manager.directory, Translator("en"))
 
-    assert dialog.table.rowCount() == 1
-    assert dialog.table.item(0, 1).text() == "1"
-    assert dialog.selected_path == backup
+    assert dialog.table.rowCount() == 4
+    assert all(
+        dialog.table.item(row, 2).text() == "1"
+        for row in range(dialog.table.rowCount())
+    )
     assert dialog.restore_button.isEnabled()
+    dialog.type_filter.setCurrentIndex(
+        dialog.type_filter.findData(BackupKind.BEFORE_IMPORT.value)
+    )
+    visible_rows = [
+        row
+        for row in range(dialog.table.rowCount())
+        if not dialog.table.isRowHidden(row)
+    ]
+    assert len(visible_rows) == 1
+    assert dialog.table.item(visible_rows[0], 1).text() == "Before import"
+    assert dialog.selected_path == before_import
 
     dialog.deleteLater()
     application.processEvents()
