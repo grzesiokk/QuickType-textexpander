@@ -45,10 +45,12 @@ Close QuickType from its tray menu before copying its database.
 Use **Duplicate** / **Duplikuj** or `Ctrl+D` to create an editable copy of the
 selected snippet. Its abbreviation receives a unique `_copy` suffix.
 
-Copy any text, then choose **New from clipboard** / **Nowy ze schowka** from
-the arrow beside **New**, press `Ctrl+Shift+N`, or use the tray-menu action.
-QuickType opens a new unsaved snippet with the clipboard text already placed
-in its expansion. Enter an abbreviation and save it normally.
+Copy any text, then press the global `Ctrl+Alt+N` shortcut even while QuickType
+is hidden. You can also choose **New from clipboard** / **Nowy ze schowka**
+from the arrow beside **New**, press `Ctrl+Shift+N` while the main window is
+active, or use the tray-menu action. QuickType opens a new unsaved snippet with
+the clipboard text already placed in its expansion. Enter an abbreviation and
+save it normally.
 
 Right-click a snippet to enable or disable it, change its favorite status,
 duplicate it, or delete it. Double-click the star or enabled-state column for a
@@ -100,12 +102,18 @@ Other snippets are ordered by their usage count.
 
 The global shortcut can be changed immediately in Settings to
 **Ctrl+Shift+Space**, **Alt+Shift+Space**, or disabled completely.
+The separate global clipboard-capture shortcut defaults to **Ctrl+Alt+N** and
+can be changed to **Alt+Shift+N** or disabled. Both global shortcuts continue
+to work when text expansion itself is paused.
 
 ## Keyboard and clipboard workflow
 
 - `Ctrl+F` focuses the snippet search and selects its current query.
 - `Esc` clears both the search query and category filter.
-- `Ctrl+N` starts an empty snippet; `Ctrl+Shift+N` starts one from clipboard.
+- `Ctrl+N` starts an empty snippet; `Ctrl+Shift+N` starts one from clipboard
+  while the main window is active.
+- `Ctrl+Alt+N` starts a snippet from clipboard globally, including while
+  QuickType is hidden in the tray.
 - `Ctrl+S` saves the current snippet.
 - `Ctrl+Shift+C` copies the editor's rendered preview.
 - **Copy result** / **Kopiuj wynik** is also available below the preview and in

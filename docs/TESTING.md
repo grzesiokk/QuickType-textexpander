@@ -44,20 +44,23 @@ Before publishing a release:
    New-button menu, `Ctrl+Shift+N`, and the tray action; confirm the expansion
    is prefilled, remains unsaved until an abbreviation is entered, and an empty
    clipboard does not replace the current edit.
-11. Verify `Ctrl+F`, clear search and category filters with `Esc`, then copy a
+11. Hide QuickType and use global `Ctrl+Alt+N` from another application. Repeat
+    while expansion is paused, change the shortcut to `Alt+Shift+N`, then
+    disable it in Settings and verify each state without restarting.
+12. Verify `Ctrl+F`, clear search and category filters with `Esc`, then copy a
    rendered preview containing date, clipboard, and cursor variables with
    `Ctrl+Shift+C` and the context-menu action.
-12. Rename and remove a category in the category manager. Confirm that all
+13. Rename and remove a category in the category manager. Confirm that all
    affected snippets remain present and that the category filters refresh.
-13. Open Statistics, verify the ranking and dates, then reset one counter and
+14. Open Statistics, verify the ranking and dates, then reset one counter and
    all remaining counters after their confirmation prompts.
-14. Open Data maintenance, create a manual backup, run the database integrity
+15. Open Data maintenance, create a manual backup, run the database integrity
    check, and open the data folder in Windows Explorer.
-15. Restore an automatic backup and confirm that the previous state is saved as
+16. Restore an automatic backup and confirm that the previous state is saved as
    `QuickType-before-restore-*.json`.
-16. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+17. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
-17. Confirm that expansion does not run in QuickType's editor or a recognized
+18. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
-18. Close QuickType from the tray and start it again to confirm data
+19. Close QuickType from the tray and start it again to confirm data
     persistence.

@@ -10,8 +10,11 @@ from typing import Callable
 
 from .constants import INJECTED_EVENT_MARKER
 from .hotkeys import (
+    CLIPBOARD_CAPTURE_HOTKEY_SPECS,
+    DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
     DEFAULT_QUICK_ACCESS_HOTKEY,
     hotkey_matches,
+    normalize_clipboard_capture_hotkey,
     normalize_quick_access_hotkey,
 )
 from .matcher import ExpansionAction, SnippetMatcher
@@ -49,6 +52,7 @@ VK_UP = 0x26
 VK_RIGHT = 0x27
 VK_DOWN = 0x28
 VK_DELETE = 0x2E
+VK_N = 0x4E
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 VK_RMENU = 0xA5
@@ -216,7 +220,9 @@ class KeyboardHookEngine:
         on_expansion: Callable[[Snippet], None] | None = None,
         on_error: Callable[[str], None] | None = None,
         on_quick_access: Callable[[int], None] | None = None,
+        on_clipboard_capture: Callable[[], None] | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
+        clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
         excluded_processes: set[str] | None = None,
     ) -> None:
         self.matcher = SnippetMatcher([])
@@ -224,8 +230,14 @@ class KeyboardHookEngine:
         self.on_expansion = on_expansion
         self.on_error = on_error
         self.on_quick_access = on_quick_access
+        self.on_clipboard_capture = on_clipboard_capture
         self._quick_access_hotkey = normalize_quick_access_hotkey(
             quick_access_hotkey
+        )
+        self._clipboard_capture_hotkey = (
+            normalize_clipboard_capture_hotkey(
+                clipboard_capture_hotkey
+            )
         )
         self._active = True
         self._active_lock = threading.Lock()
@@ -244,6 +256,7 @@ class KeyboardHookEngine:
         }
         self._suppressed_keyups: set[int] = set()
         self._quick_access_pressed = False
+        self._clipboard_capture_pressed = False
         self._password_detector = PasswordFieldDetector()
         self._started = threading.Event()
         self._startup_error: str | None = None
@@ -277,6 +290,13 @@ class KeyboardHookEngine:
         with self._active_lock:
             self._quick_access_hotkey = normalize_quick_access_hotkey(hotkey)
             self._quick_access_pressed = False
+
+    def set_clipboard_capture_hotkey(self, hotkey: str) -> None:
+        with self._active_lock:
+            self._clipboard_capture_hotkey = (
+                normalize_clipboard_capture_hotkey(hotkey)
+            )
+            self._clipboard_capture_pressed = False
 
     def start(self) -> None:
         if self._hook_thread and self._hook_thread.is_alive():
@@ -359,6 +379,9 @@ class KeyboardHookEngine:
             if virtual_key == VK_SPACE and self._quick_access_pressed:
                 self._quick_access_pressed = False
                 return 1
+            if virtual_key == VK_N and self._clipboard_capture_pressed:
+                self._clipboard_capture_pressed = False
+                return 1
             if virtual_key in self._suppressed_keyups:
                 self._suppressed_keyups.discard(virtual_key)
                 return 1
@@ -370,6 +393,16 @@ class KeyboardHookEngine:
         if data.flags & LLKHF_INJECTED or data.dwExtraInfo == INJECTED_EVENT_MARKER:
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
         virtual_key = int(data.vkCode)
+        if (
+            virtual_key == VK_N
+            and self.on_clipboard_capture is not None
+            and self._clipboard_capture_modifier_is_down()
+        ):
+            self.matcher.clear()
+            if not self._clipboard_capture_pressed:
+                self._clipboard_capture_pressed = True
+                self.on_clipboard_capture()
+            return 1
         if (
             virtual_key == VK_SPACE
             and self.on_quick_access is not None
@@ -536,6 +569,27 @@ class KeyboardHookEngine:
             shift=shift,
             right_alt=right_alt,
             windows=windows,
+        )
+
+    def _clipboard_capture_modifier_is_down(self) -> bool:
+        control = bool(user32.GetKeyState(VK_CONTROL) & 0x8000)
+        alt = bool(user32.GetKeyState(VK_MENU) & 0x8000)
+        shift = bool(user32.GetKeyState(VK_SHIFT) & 0x8000)
+        right_alt = bool(user32.GetKeyState(VK_RMENU) & 0x8000)
+        windows = bool(
+            (user32.GetKeyState(VK_LWIN) & 0x8000)
+            or (user32.GetKeyState(VK_RWIN) & 0x8000)
+        )
+        with self._active_lock:
+            hotkey = self._clipboard_capture_hotkey
+        return hotkey_matches(
+            hotkey,
+            control=control,
+            alt=alt,
+            shift=shift,
+            right_alt=right_alt,
+            windows=windows,
+            specs=CLIPBOARD_CAPTURE_HOTKEY_SPECS,
         )
 
     def expand_directly(self, snippet: Snippet, foreground_window: int) -> bool:

@@ -36,6 +36,8 @@ All phases planned for the local Windows 11 edition are complete.
   shortcuts plus rendered-copy actions for the editor and snippet context menu.
 - **Clipboard capture:** create an unsaved multiline Unicode snippet directly
   from the toolbar, `Ctrl+Shift+N`, or the system-tray menu.
+- **Global capture shortcut:** configurable Windows-wide clipboard capture that
+  remains available while the window is hidden or expansion is paused.
 - **Delivery:** unit and simulated-engine tests, PyInstaller build script,
   Windows smoke test procedure, GitHub Actions tests, and Windows build artifact.
 

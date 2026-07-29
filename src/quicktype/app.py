@@ -12,7 +12,10 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
 from .auto_backup import AutomaticBackupManager
 from .hook import KeyboardHookEngine
-from .hotkeys import normalize_quick_access_hotkey
+from .hotkeys import (
+    normalize_clipboard_capture_hotkey,
+    normalize_quick_access_hotkey,
+)
 from .i18n import Translator
 from .models import Snippet
 from .single_instance import SingleInstance
@@ -46,6 +49,9 @@ class QuickTypeController:
         quick_access_hotkey = normalize_quick_access_hotkey(
             self.storage.get_setting("quick_access_hotkey")
         )
+        clipboard_capture_hotkey = normalize_clipboard_capture_hotkey(
+            self.storage.get_setting("clipboard_capture_hotkey")
+        )
         repair_autostart_if_enabled()
         autostart = is_autostart_enabled()
         automatic_backups = self.storage.get_setting("automatic_backups", "1") != "0"
@@ -57,7 +63,9 @@ class QuickTypeController:
             on_expansion=self.signals.expanded.emit,
             on_error=self.signals.error.emit,
             on_quick_access=self.signals.quick_access.emit,
+            on_clipboard_capture=self.signals.clipboard_capture.emit,
             quick_access_hotkey=quick_access_hotkey,
+            clipboard_capture_hotkey=clipboard_capture_hotkey,
             excluded_processes=excluded_processes,
         )
         self.window = MainWindow(
@@ -68,6 +76,7 @@ class QuickTypeController:
             automatic_backups=automatic_backups,
             excluded_processes=excluded_processes,
             quick_access_hotkey=quick_access_hotkey,
+            clipboard_capture_hotkey=clipboard_capture_hotkey,
         )
         self.quick_access = QuickAccessDialog(
             self.storage,
@@ -99,11 +108,17 @@ class QuickTypeController:
         self.window.quick_access_hotkey_change_requested.connect(
             self.set_quick_access_hotkey
         )
+        self.window.clipboard_capture_hotkey_change_requested.connect(
+            self.set_clipboard_capture_hotkey
+        )
         self.window.snippets_changed.connect(self.refresh_snippets)
         self.window.quit_requested.connect(self.quit)
         self.signals.expanded.connect(self._on_expanded)
         self.signals.error.connect(self._on_engine_error)
         self.signals.quick_access.connect(self.quick_access.show_for_window)
+        self.signals.clipboard_capture.connect(
+            self.new_snippet_from_clipboard
+        )
         self.quick_access.snippet_chosen.connect(self._quick_access_chosen)
         self.application.aboutToQuit.connect(self.shutdown)
 
@@ -210,6 +225,15 @@ class QuickTypeController:
         self.engine.set_quick_access_hotkey(normalized)
         self.window.set_quick_access_hotkey(normalized)
         self.quick_access.set_hotkey(normalized)
+
+    def set_clipboard_capture_hotkey(self, hotkey: str) -> None:
+        normalized = normalize_clipboard_capture_hotkey(hotkey)
+        self.storage.set_setting(
+            "clipboard_capture_hotkey",
+            normalized,
+        )
+        self.engine.set_clipboard_capture_hotkey(normalized)
+        self.window.set_clipboard_capture_hotkey(normalized)
 
     def _on_expanded(self, snippet: object) -> None:
         abbreviation = getattr(snippet, "abbreviation", "")

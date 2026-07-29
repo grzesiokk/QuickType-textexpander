@@ -54,8 +54,11 @@ from .auto_backup import list_automatic_backups
 from .backup import BackupFormatError, export_backup, import_backup
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .hotkeys import (
+    CLIPBOARD_CAPTURE_HOTKEY_SPECS,
+    DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
     DEFAULT_QUICK_ACCESS_HOTKEY,
     HOTKEY_SPECS,
+    normalize_clipboard_capture_hotkey,
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
@@ -91,6 +94,11 @@ HOTKEY_TRANSLATION_KEYS = {
     "alt_shift_space": "hotkey_alt_shift_space",
     "disabled": "hotkey_disabled",
 }
+CLIPBOARD_HOTKEY_TRANSLATION_KEYS = {
+    "ctrl_alt_n": "hotkey_ctrl_alt_n",
+    "alt_shift_n": "hotkey_alt_shift_n",
+    "disabled": "hotkey_disabled",
+}
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -105,6 +113,7 @@ class EngineSignals(QObject):
     expanded = Signal(object)
     error = Signal(str)
     quick_access = Signal(int)
+    clipboard_capture = Signal()
 
 
 class SettingsDialog(QDialog):
@@ -119,12 +128,13 @@ class SettingsDialog(QDialog):
         database_path: Path,
         automatic_backups: bool = True,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
+        clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.t = translator
         self.setModal(True)
-        self.resize(560, 430)
+        self.resize(580, 470)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -159,6 +169,28 @@ class SettingsDialog(QDialog):
         form.addRow(
             self.t("quick_access_shortcut"),
             self.quick_access_hotkey_combo,
+        )
+
+        self.clipboard_capture_hotkey_combo = QComboBox()
+        for hotkey in CLIPBOARD_CAPTURE_HOTKEY_SPECS:
+            self.clipboard_capture_hotkey_combo.addItem(
+                self.t(CLIPBOARD_HOTKEY_TRANSLATION_KEYS[hotkey]),
+                hotkey,
+            )
+        selected_capture_hotkey = normalize_clipboard_capture_hotkey(
+            clipboard_capture_hotkey
+        )
+        self.clipboard_capture_hotkey_combo.setCurrentIndex(
+            max(
+                0,
+                self.clipboard_capture_hotkey_combo.findData(
+                    selected_capture_hotkey
+                ),
+            )
+        )
+        form.addRow(
+            self.t("clipboard_capture_shortcut"),
+            self.clipboard_capture_hotkey_combo,
         )
 
         self.excluded_label = QLabel(self.t("excluded_apps"))
@@ -210,6 +242,12 @@ class SettingsDialog(QDialog):
     def selected_quick_access_hotkey(self) -> str:
         return normalize_quick_access_hotkey(
             str(self.quick_access_hotkey_combo.currentData())
+        )
+
+    @property
+    def selected_clipboard_capture_hotkey(self) -> str:
+        return normalize_clipboard_capture_hotkey(
+            str(self.clipboard_capture_hotkey_combo.currentData())
         )
 
 
@@ -983,6 +1021,7 @@ class MainWindow(QMainWindow):
     automatic_backups_change_requested = Signal(bool)
     excluded_processes_change_requested = Signal(object)
     quick_access_hotkey_change_requested = Signal(str)
+    clipboard_capture_hotkey_change_requested = Signal(str)
     snippets_changed = Signal()
     quit_requested = Signal()
 
@@ -996,6 +1035,7 @@ class MainWindow(QMainWindow):
         automatic_backups: bool = True,
         excluded_processes: set[str] | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
+        clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
     ) -> None:
         super().__init__()
         self.storage = storage
@@ -1006,6 +1046,11 @@ class MainWindow(QMainWindow):
         self.excluded_processes = set(excluded_processes or set())
         self.quick_access_hotkey = normalize_quick_access_hotkey(
             quick_access_hotkey
+        )
+        self.clipboard_capture_hotkey = (
+            normalize_clipboard_capture_hotkey(
+                clipboard_capture_hotkey
+            )
         )
         self.snippets: list[Snippet] = []
         self._current_id: int | None = None
@@ -2095,6 +2140,7 @@ class MainWindow(QMainWindow):
             excluded_processes=self.excluded_processes,
             database_path=self.storage.path,
             quick_access_hotkey=self.quick_access_hotkey,
+            clipboard_capture_hotkey=self.clipboard_capture_hotkey,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -2117,6 +2163,13 @@ class MainWindow(QMainWindow):
             self.quick_access_hotkey_change_requested.emit(
                 dialog.selected_quick_access_hotkey
             )
+        if (
+            dialog.selected_clipboard_capture_hotkey
+            != self.clipboard_capture_hotkey
+        ):
+            self.clipboard_capture_hotkey_change_requested.emit(
+                dialog.selected_clipboard_capture_hotkey
+            )
 
     def set_engine_active(self, active: bool) -> None:
         self.engine_active = active
@@ -2135,6 +2188,11 @@ class MainWindow(QMainWindow):
 
     def set_quick_access_hotkey(self, hotkey: str) -> None:
         self.quick_access_hotkey = normalize_quick_access_hotkey(hotkey)
+
+    def set_clipboard_capture_hotkey(self, hotkey: str) -> None:
+        self.clipboard_capture_hotkey = (
+            normalize_clipboard_capture_hotkey(hotkey)
+        )
 
     def refresh_usage(self, snippet: Snippet) -> None:
         self.snippets = [
