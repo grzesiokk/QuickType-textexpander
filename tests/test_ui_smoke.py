@@ -113,9 +113,11 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
         excluded_processes={"KeePass.exe", "Code.exe"},
         database_path=storage.path,
         quick_access_hotkey="ctrl_shift_space",
+        clipboard_capture_hotkey="alt_shift_n",
     )
     assert dialog.selected_excluded_processes == {"KeePass.exe", "Code.exe"}
     assert dialog.selected_quick_access_hotkey == "ctrl_shift_space"
+    assert dialog.selected_clipboard_capture_hotkey == "alt_shift_n"
     dialog.deleteLater()
     window.deleteLater()
     application.processEvents()

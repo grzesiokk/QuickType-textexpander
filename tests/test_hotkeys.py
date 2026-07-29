@@ -1,8 +1,11 @@
 import pytest
 
 from quicktype.hotkeys import (
+    CLIPBOARD_CAPTURE_HOTKEY_SPECS,
+    DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
     DEFAULT_QUICK_ACCESS_HOTKEY,
     hotkey_matches,
+    normalize_clipboard_capture_hotkey,
     normalize_quick_access_hotkey,
 )
 
@@ -10,6 +13,14 @@ from quicktype.hotkeys import (
 def test_unknown_hotkey_falls_back_to_default() -> None:
     assert normalize_quick_access_hotkey("invalid") == DEFAULT_QUICK_ACCESS_HOTKEY
     assert normalize_quick_access_hotkey(None) == DEFAULT_QUICK_ACCESS_HOTKEY
+    assert (
+        normalize_clipboard_capture_hotkey("invalid")
+        == DEFAULT_CLIPBOARD_CAPTURE_HOTKEY
+    )
+    assert (
+        normalize_clipboard_capture_hotkey(None)
+        == DEFAULT_CLIPBOARD_CAPTURE_HOTKEY
+    )
 
 
 @pytest.mark.parametrize(
@@ -58,4 +69,34 @@ def test_altgr_and_windows_modifier_are_rejected() -> None:
         shift=False,
         right_alt=False,
         windows=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("hotkey", "control", "alt", "shift", "expected"),
+    [
+        ("ctrl_alt_n", True, True, False, True),
+        ("ctrl_alt_n", True, True, True, False),
+        ("alt_shift_n", False, True, True, True),
+        ("disabled", True, True, False, False),
+    ],
+)
+def test_clipboard_capture_hotkeys_require_exact_modifiers(
+    hotkey: str,
+    control: bool,
+    alt: bool,
+    shift: bool,
+    expected: bool,
+) -> None:
+    assert (
+        hotkey_matches(
+            hotkey,
+            control=control,
+            alt=alt,
+            shift=shift,
+            right_alt=False,
+            windows=False,
+            specs=CLIPBOARD_CAPTURE_HOTKEY_SPECS,
+        )
+        is expected
     )

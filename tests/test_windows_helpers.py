@@ -44,6 +44,8 @@ def test_global_hook_can_start_and_stop() -> None:
     assert engine._excluded_processes == {"notepad.exe"}
     engine.set_excluded_processes({"Code.exe"})
     assert engine._excluded_processes == {"code.exe"}
+    engine.set_clipboard_capture_hotkey("alt_shift_n")
+    assert engine._clipboard_capture_hotkey == "alt_shift_n"
     engine.start()
     try:
         assert engine._hook_thread_id
@@ -119,6 +121,41 @@ def test_quick_access_chord_is_suppressed_and_emitted_once_per_press(
     assert engine._keyboard_proc(0, hook_module.WM_KEYUP, pointer) == 1
     assert engine._keyboard_proc(0, hook_module.WM_KEYDOWN, pointer) == 1
     assert windows == [2468, 2468]
+
+
+def test_clipboard_capture_chord_is_global_and_emitted_once_per_press(
+    monkeypatch,
+) -> None:
+    class FakeUser32:
+        def GetKeyState(self, key: int) -> int:
+            return (
+                0x8000
+                if key in {hook_module.VK_CONTROL, hook_module.VK_MENU}
+                else 0
+            )
+
+    captures: list[str] = []
+    engine = KeyboardHookEngine(
+        [],
+        on_clipboard_capture=lambda: captures.append("capture"),
+    )
+    engine.set_active(False)
+    monkeypatch.setattr(hook_module, "user32", FakeUser32())
+    event = hook_module.KBDLLHOOKSTRUCT(
+        vkCode=hook_module.VK_N,
+        scanCode=0,
+        flags=0,
+        time=0,
+        dwExtraInfo=0,
+    )
+    pointer = ctypes.addressof(event)
+
+    assert engine._keyboard_proc(0, hook_module.WM_KEYDOWN, pointer) == 1
+    assert engine._keyboard_proc(0, hook_module.WM_KEYDOWN, pointer) == 1
+    assert captures == ["capture"]
+    assert engine._keyboard_proc(0, hook_module.WM_KEYUP, pointer) == 1
+    assert engine._keyboard_proc(0, hook_module.WM_KEYDOWN, pointer) == 1
+    assert captures == ["capture", "capture"]
 
 
 def test_direct_expansion_is_queued_without_requiring_active(monkeypatch) -> None:
