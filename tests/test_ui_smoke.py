@@ -13,6 +13,7 @@ from quicktype.models import Snippet, TriggerMode
 from quicktype.storage import Storage
 from quicktype.ui import (
     BackupRestoreDialog,
+    CategoryManagerDialog,
     MainWindow,
     QuickAccessDialog,
     SettingsDialog,
@@ -213,6 +214,35 @@ def test_backup_restore_dialog_lists_newest_automatic_backup(
     assert dialog.table.item(0, 1).text() == "1"
     assert dialog.selected_path == backup
     assert dialog.restore_button.isEnabled()
+
+    dialog.deleteLater()
+    application.processEvents()
+
+
+def test_category_manager_lists_category_counts(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(None, "one", "1", TriggerMode.IMMEDIATE, category="Work")
+    )
+    storage.save_snippet(
+        Snippet(None, "two", "2", TriggerMode.IMMEDIATE, category="Work")
+    )
+    storage.save_snippet(
+        Snippet(None, "three", "3", TriggerMode.IMMEDIATE, category="Home")
+    )
+
+    dialog = CategoryManagerDialog(storage, Translator("en"))
+
+    assert dialog.table.rowCount() == 2
+    assert dialog.table.item(0, 0).text() == "Home"
+    assert dialog.table.item(0, 1).text() == "1"
+    assert dialog.table.item(1, 0).text() == "Work"
+    assert dialog.table.item(1, 1).text() == "2"
+    assert dialog.selected_category == "Home"
+    assert dialog.rename_button.isEnabled()
+    assert dialog.clear_button.isEnabled()
 
     dialog.deleteLater()
     application.processEvents()

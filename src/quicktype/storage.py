@@ -130,6 +130,60 @@ class Storage:
             ).fetchone()
         return self._row_to_snippet(row) if row else None
 
+    def list_categories(self) -> list[tuple[str, int]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT category, COUNT(*) AS snippet_count
+                FROM snippets
+                WHERE category <> ''
+                GROUP BY category
+                ORDER BY category COLLATE NOCASE, category
+                """
+            ).fetchall()
+        return [
+            (str(row["category"]), int(row["snippet_count"]))
+            for row in rows
+        ]
+
+    def rename_category(self, current: str, replacement: str) -> int:
+        source = current.strip()
+        target = replacement.strip()
+        if not source:
+            raise ValueError("The source category cannot be empty.")
+        if not target:
+            raise ValueError("The replacement category cannot be empty.")
+        issues = validate_category(target)
+        if issues:
+            raise ValueError(issues[0].message)
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE snippets
+                SET category = ?, updated_at = ?
+                WHERE category = ?
+                """,
+                (target, timestamp, source),
+            )
+        return cursor.rowcount
+
+    def clear_category(self, category: str) -> int:
+        source = category.strip()
+        if not source:
+            return 0
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE snippets
+                SET category = '', updated_at = ?
+                WHERE category = ?
+                """,
+                (timestamp, source),
+            )
+        return cursor.rowcount
+
     def save_snippet(self, snippet: Snippet) -> Snippet:
         issues = validate_abbreviation(snippet.abbreviation)
         if issues:

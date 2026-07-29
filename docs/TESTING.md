@@ -32,11 +32,13 @@ Before publishing a release:
    autostart.
 7. Edit, duplicate, delete, export, and import snippets. Verify the right-click
    actions and double-click toggles in the snippet list.
-8. Restore an automatic backup and confirm that the previous state is saved as
+8. Rename and remove a category in the category manager. Confirm that all
+   affected snippets remain present and that the category filters refresh.
+9. Restore an automatic backup and confirm that the previous state is saved as
    `QuickType-before-restore-*.json`.
-9. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+10. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
-10. Confirm that expansion does not run in QuickType's editor or a recognized
+11. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
-11. Close QuickType from the tray and start it again to confirm data
+12. Close QuickType from the tray and start it again to confirm data
     persistence.
