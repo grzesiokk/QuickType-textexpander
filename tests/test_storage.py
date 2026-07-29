@@ -19,6 +19,7 @@ def test_database_is_created_and_starts_empty(storage: Storage) -> None:
     assert storage.path.exists()
     assert storage.list_snippets() == []
     assert storage.get_setting("missing", "fallback") == "fallback"
+    assert storage.check_integrity() == (True, "ok")
 
 
 def test_snippet_crud_and_case_sensitive_uniqueness(storage: Storage) -> None:

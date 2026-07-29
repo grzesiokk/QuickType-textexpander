@@ -17,6 +17,7 @@ from quicktype.storage import Storage
 from quicktype.ui import (
     BackupRestoreDialog,
     CategoryManagerDialog,
+    DataMaintenanceDialog,
     MainWindow,
     QuickAccessDialog,
     SettingsDialog,
@@ -369,4 +370,27 @@ def test_main_window_sorts_counts_and_exports_visible_snippets(
     } == {"alpha", "gamma"}
 
     window.deleteLater()
+    application.processEvents()
+
+
+def test_data_maintenance_dialog_creates_backup_and_checks_database(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "QuickTypeData" / "quicktype.sqlite3")
+    storage.initialize()
+    storage.save_snippet(
+        Snippet(None, "sig", "Regards", TriggerMode.DELIMITER)
+    )
+    dialog = DataMaintenanceDialog(storage, Translator("en"))
+
+    assert "Snippets: 1" in dialog.summary_label.text()
+    assert "JSON backups: 0" in dialog.summary_label.text()
+    dialog.create_backup()
+    assert "Created backup" in dialog.result_label.text()
+    assert "JSON backups: 1" in dialog.summary_label.text()
+    dialog.check_database()
+    assert dialog.result_label.text() == "The database integrity check passed."
+
+    dialog.deleteLater()
     application.processEvents()

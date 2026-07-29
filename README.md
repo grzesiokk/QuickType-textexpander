@@ -131,6 +131,16 @@ to both typed abbreviations and the quick-access picker.
 - Settings contains an excluded-applications list. Enter one executable name
   per line, such as `KeePass.exe`, to prevent expansion in that process.
 
+## Data maintenance
+
+Open **Data** / **Dane** from the main toolbar to see the number of snippets,
+the number of JSON backups, the SQLite database size, and the exact data-folder
+path. From the same window you can:
+
+- create a timestamped `QuickType-manual-*.json` backup immediately;
+- run SQLite's integrity check without modifying the database;
+- open `QuickTypeData` directly in Windows Explorer.
+
 ## Safety and Windows limitations
 
 - Typed text is held only in a short in-memory matching buffer and is never
