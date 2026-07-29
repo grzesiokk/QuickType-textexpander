@@ -118,6 +118,14 @@ class Storage:
             ).fetchall()
         return [self._row_to_snippet(row) for row in rows]
 
+    def check_integrity(self) -> tuple[bool, str]:
+        with self._connection() as connection:
+            rows = connection.execute("PRAGMA quick_check").fetchall()
+        messages = [str(row[0]) for row in rows]
+        if messages == ["ok"]:
+            return True, "ok"
+        return False, "; ".join(messages) if messages else "No result"
+
     def get_snippet(self, snippet_id: int) -> Snippet | None:
         with self._connection() as connection:
             row = connection.execute(

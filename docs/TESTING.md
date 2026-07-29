@@ -39,11 +39,13 @@ Before publishing a release:
    affected snippets remain present and that the category filters refresh.
 10. Open Statistics, verify the ranking and dates, then reset one counter and
    all remaining counters after their confirmation prompts.
-11. Restore an automatic backup and confirm that the previous state is saved as
+11. Open Data maintenance, create a manual backup, run the database integrity
+   check, and open the data folder in Windows Explorer.
+12. Restore an automatic backup and confirm that the previous state is saved as
    `QuickType-before-restore-*.json`.
-12. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
+13. Confirm that `QuickTypeData\Backups` retains no more than 20 automatic
    backup files.
-13. Confirm that expansion does not run in QuickType's editor or a recognized
+14. Confirm that expansion does not run in QuickType's editor or a recognized
    password field.
-14. Close QuickType from the tray and start it again to confirm data
+15. Close QuickType from the tray and start it again to confirm data
     persistence.

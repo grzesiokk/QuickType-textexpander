@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSignalBlocker, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QFont, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QUrl, Signal
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -50,6 +59,11 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
+from .maintenance import (
+    collect_data_summary,
+    create_manual_backup,
+    format_file_size,
+)
 from .models import (
     Snippet,
     TriggerMode,
@@ -725,6 +739,111 @@ class StatisticsDialog(QDialog):
         return snippet.last_used_at.strftime("%Y-%m-%d %H:%M")
 
 
+class DataMaintenanceDialog(QDialog):
+    def __init__(
+        self,
+        storage: Storage,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.storage = storage
+        self.t = translator
+        self.setModal(True)
+        self.resize(620, 330)
+        self.setWindowTitle(self.t("data_maintenance"))
+
+        layout = QVBoxLayout(self)
+        self.summary_label = QLabel()
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setProperty("kind", "emptyTitle")
+        layout.addWidget(self.summary_label)
+
+        path_label = QLabel(
+            self.t("data_folder_path", path=str(self.storage.path.parent))
+        )
+        path_label.setWordWrap(True)
+        path_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        path_label.setProperty("kind", "muted")
+        layout.addWidget(path_label)
+
+        actions = QGridLayout()
+        self.backup_button = QPushButton(self.t("create_backup_now"))
+        self.backup_button.clicked.connect(self.create_backup)
+        actions.addWidget(self.backup_button, 0, 0)
+        self.check_button = QPushButton(self.t("check_database"))
+        self.check_button.clicked.connect(self.check_database)
+        actions.addWidget(self.check_button, 0, 1)
+        self.open_folder_button = QPushButton(self.t("open_data_folder"))
+        self.open_folder_button.clicked.connect(self.open_data_folder)
+        actions.addWidget(self.open_folder_button, 1, 0, 1, 2)
+        layout.addLayout(actions)
+
+        self.result_label = QLabel()
+        self.result_label.setWordWrap(True)
+        layout.addWidget(self.result_label)
+        layout.addStretch(1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.refresh_summary()
+
+    def refresh_summary(self) -> None:
+        summary = collect_data_summary(self.storage)
+        self.summary_label.setText(
+            self.t(
+                "data_summary",
+                snippets=summary.snippet_count,
+                backups=summary.backup_count,
+                size=format_file_size(summary.database_bytes),
+            )
+        )
+
+    def create_backup(self) -> None:
+        try:
+            path = create_manual_backup(self.storage)
+        except OSError as error:
+            self.result_label.setText(
+                self.t("manual_backup_error", error=str(error))
+            )
+            return
+        self.result_label.setText(
+            self.t("manual_backup_created", file=path.name)
+        )
+        self.refresh_summary()
+
+    def check_database(self) -> None:
+        try:
+            valid, details = self.storage.check_integrity()
+        except sqlite3.Error as error:
+            valid, details = False, str(error)
+        self.result_label.setText(
+            self.t(
+                "database_check_ok" if valid else "database_check_failed",
+                details=details,
+            )
+        )
+
+    def open_data_folder(self) -> None:
+        try:
+            self.storage.path.parent.mkdir(parents=True, exist_ok=True)
+            opened = QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(self.storage.path.parent))
+            )
+        except OSError as error:
+            opened = False
+            details = str(error)
+        else:
+            details = str(self.storage.path.parent)
+        if not opened:
+            self.result_label.setText(
+                self.t("open_data_folder_error", error=details)
+            )
+
+
 class MainWindow(QMainWindow):
     language_change_requested = Signal(str)
     active_change_requested = Signal(bool)
@@ -818,6 +937,10 @@ class MainWindow(QMainWindow):
         self.restore_action = QAction(self)
         self.restore_action.triggered.connect(self.restore_automatic_backup)
         toolbar.addAction(self.restore_action)
+
+        self.data_action = QAction(self)
+        self.data_action.triggered.connect(self.open_data_maintenance)
+        toolbar.addAction(self.data_action)
 
         self.categories_action = QAction(self)
         self.categories_action.triggered.connect(self.open_category_manager)
@@ -1017,6 +1140,7 @@ class MainWindow(QMainWindow):
         self.export_action.setText(self.t("export"))
         self.export_filtered_action.setText(self.t("export_filtered"))
         self.restore_action.setText(self.t("restore"))
+        self.data_action.setText(self.t("data_maintenance"))
         self.categories_action.setText(self.t("manage_categories"))
         self.statistics_action.setText(self.t("statistics"))
         self.active_action.setText(self.t("engine_active"))
@@ -1632,6 +1756,11 @@ class MainWindow(QMainWindow):
             return
         self.reload_snippets(select_id=selected_id)
         self.status_message.setText(self.t("statistics_reset"))
+
+    def open_data_maintenance(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        DataMaintenanceDialog(self.storage, self.t, self).exec()
 
     def cancel_edit(self) -> None:
         if self._current_id is not None:
