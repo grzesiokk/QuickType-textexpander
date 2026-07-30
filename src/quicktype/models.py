@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+import regex
+
 
 class TriggerMode(StrEnum):
     IMMEDIATE = "immediate"
@@ -66,6 +68,11 @@ def validate_regex_pattern(value: str) -> list[ValidationIssue]:
         issues.append(
             ValidationIssue("control", "Regular expression cannot contain null characters.")
         )
+    if value and len(value) <= 512:
+        try:
+            regex.compile(value, flags=regex.VERSION1)
+        except regex.error as error:
+            issues.append(ValidationIssue("invalid_regex", str(error)))
     return issues
 
 

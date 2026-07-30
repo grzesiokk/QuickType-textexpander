@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+import regex
 from PySide6.QtCore import (
     QByteArray,
     QObject,
@@ -88,12 +89,14 @@ from .maintenance import (
 )
 from .models import (
     Snippet,
+    SnippetKind,
     TriggerMode,
     next_copy_abbreviation,
     normalize_applications,
+    normalize_search_terms,
     snippet_applies_to_process,
-    validate_abbreviation,
     validate_category,
+    validate_snippet_trigger,
 )
 from .recovery import (
     RestoreAnalysis,
@@ -103,7 +106,14 @@ from .recovery import (
     restore_backup,
 )
 from .storage import DuplicateAbbreviationError, Storage
-from .template_engine import TemplateIssue, inspect_template, render_template
+from .template_engine import (
+    FormField,
+    FormFieldKind,
+    TemplateIssue,
+    escape_field_part,
+    inspect_template,
+    render_template,
+)
 from .windows_platform import process_name_from_window
 
 ID_ROLE = Qt.ItemDataRole.UserRole
@@ -140,6 +150,183 @@ class EngineSignals(QObject):
     error = Signal(str)
     quick_access = Signal(int)
     clipboard_capture = Signal()
+    form_requested = Signal(object, int)
+
+
+class ExpansionFormDialog(QDialog):
+    def __init__(
+        self,
+        translator: Translator,
+        fields: tuple[FormField, ...],
+        *,
+        remembered_values: dict[str, str] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.t = translator
+        self.fields = fields
+        self.remembered_values = remembered_values or {}
+        self.widgets: dict[str, QWidget] = {}
+        self.setWindowTitle(self.t("form_title"))
+        self.setMinimumWidth(430)
+
+        layout = QVBoxLayout(self)
+        description = QLabel(self.t("form_description"))
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        form = QFormLayout()
+        for field in fields:
+            remembered = self.remembered_values.get(
+                field.identifier,
+                field.default,
+            )
+            if field.kind == FormFieldKind.INPUT:
+                widget: QWidget = QLineEdit(remembered)
+            elif field.kind == FormFieldKind.CHOICE:
+                combo = QComboBox()
+                combo.addItems(field.options)
+                index = combo.findText(remembered)
+                combo.setCurrentIndex(max(0, index))
+                widget = combo
+            else:
+                checkbox = QCheckBox()
+                checkbox.setChecked(remembered != field.unchecked_text)
+                widget = checkbox
+            widget.setAccessibleName(field.label)
+            self.widgets[field.identifier] = widget
+            form.addRow(field.label, widget)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @property
+    def values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        fields = {field.identifier: field for field in self.fields}
+        for identifier, widget in self.widgets.items():
+            field = fields[identifier]
+            if isinstance(widget, QLineEdit):
+                values[identifier] = widget.text()
+            elif isinstance(widget, QComboBox):
+                values[identifier] = widget.currentText()
+            elif isinstance(widget, QCheckBox):
+                values[identifier] = (
+                    field.checked_text
+                    if widget.isChecked()
+                    else field.unchecked_text
+                )
+        return values
+
+
+class TemplateAssistantDialog(QDialog):
+    TYPES = ("input", "choice", "check", "var", "calc", "snippet")
+
+    def __init__(
+        self,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.t = translator
+        self.setWindowTitle(self.t("template_assistant_title"))
+        self.setMinimumWidth(470)
+        layout = QFormLayout(self)
+
+        self.type_combo = QComboBox()
+        for token_type in self.TYPES:
+            self.type_combo.addItem(
+                self.t(f"template_type_{token_type}"),
+                token_type,
+            )
+        self.type_combo.currentIndexChanged.connect(self._update_help)
+        layout.addRow(self.t("template_field_type"), self.type_combo)
+
+        self.identifier_edit = QLineEdit()
+        layout.addRow(self.t("template_identifier"), self.identifier_edit)
+        self.label_edit = QLineEdit()
+        layout.addRow(self.t("template_field_label"), self.label_edit)
+        self.values_edit = QLineEdit()
+        layout.addRow(self.t("template_field_values"), self.values_edit)
+        self.help_label = QLabel()
+        self.help_label.setWordWrap(True)
+        self.help_label.setProperty("kind", "muted")
+        layout.addRow("", self.help_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+        self._update_help()
+
+    @property
+    def token(self) -> str:
+        token_type = str(self.type_combo.currentData())
+        identifier = escape_field_part(self.identifier_edit.text().strip())
+        label = escape_field_part(self.label_edit.text().strip())
+        raw_values = self.values_edit.text()
+        if token_type == "input":
+            return (
+                "{{input:"
+                + identifier
+                + "|"
+                + label
+                + "|"
+                + escape_field_part(raw_values)
+                + "}}"
+            )
+        if token_type == "choice":
+            options = [
+                escape_field_part(value.strip())
+                for value in raw_values.replace(";", ",").split(",")
+                if value.strip()
+            ]
+            return "{{choice:" + "|".join((identifier, label, *options)) + "}}"
+        if token_type == "check":
+            values = [value.strip() for value in raw_values.split("|", 1)]
+            checked = escape_field_part(values[0] if values else "")
+            unchecked = escape_field_part(values[1] if len(values) > 1 else "")
+            return "{{check:" + "|".join((identifier, label, checked, unchecked)) + "}}"
+        if token_type == "var":
+            return "{{var:" + identifier + "}}"
+        if token_type == "calc":
+            return "{{calc:" + self.identifier_edit.text().strip() + "}}"
+        return "{{snippet:" + self.identifier_edit.text().strip() + "}}"
+
+    def _accept_if_valid(self) -> None:
+        token_type = str(self.type_combo.currentData())
+        if not self.identifier_edit.text().strip():
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t("template_identifier_required"),
+            )
+            return
+        if token_type == "choice" and not any(
+            value.strip()
+            for value in self.values_edit.text().replace(";", ",").split(",")
+        ):
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t("template_choice_required"),
+            )
+            return
+        self.accept()
+
+    def _update_help(self) -> None:
+        token_type = str(self.type_combo.currentData())
+        self.help_label.setText(self.t(f"template_help_{token_type}"))
+        self.label_edit.setEnabled(token_type in {"input", "choice", "check"})
+        self.values_edit.setEnabled(token_type in {"input", "choice", "check"})
 
 
 class SettingsDialog(QDialog):
@@ -1681,9 +1868,13 @@ class MainWindow(QMainWindow):
         QWidget.setTabOrder(self.category_filter, self.table)
         QWidget.setTabOrder(self.table, self.abbreviation_edit)
         QWidget.setTabOrder(self.abbreviation_edit, self.category_combo)
-        QWidget.setTabOrder(self.category_combo, self.mode_combo)
+        QWidget.setTabOrder(self.category_combo, self.kind_combo)
+        QWidget.setTabOrder(self.kind_combo, self.mode_combo)
         QWidget.setTabOrder(self.mode_combo, self.applications_edit)
-        QWidget.setTabOrder(self.applications_edit, self.enabled_checkbox)
+        QWidget.setTabOrder(self.applications_edit, self.description_edit)
+        QWidget.setTabOrder(self.description_edit, self.search_terms_edit)
+        QWidget.setTabOrder(self.search_terms_edit, self.priority_spin)
+        QWidget.setTabOrder(self.priority_spin, self.enabled_checkbox)
         QWidget.setTabOrder(self.enabled_checkbox, self.favorite_checkbox)
         QWidget.setTabOrder(self.favorite_checkbox, self.expansion_edit)
 
@@ -1767,28 +1958,54 @@ class MainWindow(QMainWindow):
         form.addWidget(self.category_label, 1, 0)
         form.addWidget(self.category_combo, 1, 1)
 
+        self.kind_label = QLabel()
+        self.kind_combo = QComboBox()
+        self.kind_combo.currentIndexChanged.connect(self._snippet_kind_changed)
+        form.addWidget(self.kind_label, 2, 0)
+        form.addWidget(self.kind_combo, 2, 1)
+
         self.mode_label = QLabel()
         self.mode_combo = QComboBox()
         self.mode_combo.currentIndexChanged.connect(self._editor_changed)
-        form.addWidget(self.mode_label, 2, 0)
-        form.addWidget(self.mode_combo, 2, 1)
+        form.addWidget(self.mode_label, 3, 0)
+        form.addWidget(self.mode_combo, 3, 1)
 
         self.applications_label = QLabel()
         self.applications_edit = QLineEdit()
         self.applications_edit.setClearButtonEnabled(True)
         self.applications_edit.textChanged.connect(self._editor_changed)
-        form.addWidget(self.applications_label, 3, 0)
-        form.addWidget(self.applications_edit, 3, 1)
+        form.addWidget(self.applications_label, 4, 0)
+        form.addWidget(self.applications_edit, 4, 1)
+
+        self.description_label = QLabel()
+        self.description_edit = QLineEdit()
+        self.description_edit.setMaxLength(500)
+        self.description_edit.textChanged.connect(self._editor_changed)
+        form.addWidget(self.description_label, 5, 0)
+        form.addWidget(self.description_edit, 5, 1)
+
+        self.search_terms_label = QLabel()
+        self.search_terms_edit = QLineEdit()
+        self.search_terms_edit.textChanged.connect(self._editor_changed)
+        form.addWidget(self.search_terms_label, 6, 0)
+        form.addWidget(self.search_terms_edit, 6, 1)
+
+        self.priority_label = QLabel()
+        self.priority_spin = QSpinBox()
+        self.priority_spin.setRange(-1000, 1000)
+        self.priority_spin.valueChanged.connect(self._editor_changed)
+        form.addWidget(self.priority_label, 7, 0)
+        form.addWidget(self.priority_spin, 7, 1)
 
         self.enabled_checkbox = QCheckBox()
         self.enabled_checkbox.toggled.connect(self._editor_changed)
-        form.addWidget(self.enabled_checkbox, 4, 1)
+        form.addWidget(self.enabled_checkbox, 8, 1)
         self.favorite_checkbox = QCheckBox()
         self.favorite_checkbox.toggled.connect(self._editor_changed)
-        form.addWidget(self.favorite_checkbox, 5, 1)
+        form.addWidget(self.favorite_checkbox, 9, 1)
         self.stats_label = QLabel()
         self.stats_label.setProperty("kind", "muted")
-        form.addWidget(self.stats_label, 6, 1)
+        form.addWidget(self.stats_label, 10, 1)
         form.setColumnStretch(1, 1)
         layout.addLayout(form)
 
@@ -1809,6 +2026,11 @@ class MainWindow(QMainWindow):
             button.clicked.connect(lambda _checked=False, name=token: self.insert_variable(name))
             self.variable_buttons[token] = button
             variable_row.addWidget(button)
+        self.template_assistant_button = QPushButton()
+        self.template_assistant_button.clicked.connect(
+            self.open_template_assistant
+        )
+        variable_row.addWidget(self.template_assistant_button)
         variable_row.addStretch(1)
         layout.addLayout(variable_row)
 
@@ -1892,9 +2114,28 @@ class MainWindow(QMainWindow):
         self.empty_text.setText(self.t("empty_text"))
         self.abbreviation_label.setText(self.t("abbreviation"))
         self.category_label.setText(self.t("category"))
+        self.kind_label.setText(self.t("snippet_kind"))
         self.mode_label.setText(self.t("trigger_mode"))
         self.applications_label.setText(self.t("applications"))
         self.applications_edit.setPlaceholderText(self.t("applications_help"))
+        self.description_label.setText(self.t("description"))
+        self.description_edit.setPlaceholderText(self.t("description_help"))
+        self.search_terms_label.setText(self.t("search_terms"))
+        self.search_terms_edit.setPlaceholderText(self.t("search_terms_help"))
+        self.priority_label.setText(self.t("regex_priority"))
+        current_kind = self.kind_combo.currentData()
+        with QSignalBlocker(self.kind_combo):
+            self.kind_combo.clear()
+            self.kind_combo.addItem(
+                self.t("snippet_kind_literal"),
+                SnippetKind.LITERAL.value,
+            )
+            self.kind_combo.addItem(
+                self.t("snippet_kind_regex"),
+                SnippetKind.REGEX.value,
+            )
+            kind_index = self.kind_combo.findData(current_kind)
+            self.kind_combo.setCurrentIndex(max(0, kind_index))
         current_mode = self.mode_combo.currentData()
         with QSignalBlocker(self.mode_combo):
             self.mode_combo.clear()
@@ -1909,6 +2150,7 @@ class MainWindow(QMainWindow):
         self.variables_label.setText(self.t("variables") + ":")
         for token, button in self.variable_buttons.items():
             button.setText(self.t(token))
+        self.template_assistant_button.setText(self.t("template_assistant"))
         self.preview_group.setTitle(self.t("preview"))
         self.copy_preview_button.setText(self.t("copy_rendered"))
         self.copy_preview_button.setToolTip(self.t("copy_rendered_tooltip"))
@@ -1922,6 +2164,7 @@ class MainWindow(QMainWindow):
             next((entry for entry in self.snippets if entry.id == self._current_id), None)
         )
         self.update_preview()
+        self._update_kind_controls()
 
     def reload_snippets(self, *, select_id: int | None = None) -> None:
         self.snippets = self.storage.list_snippets()
@@ -1994,6 +2237,11 @@ class MainWindow(QMainWindow):
                     needle in snippet.abbreviation.casefold()
                     or needle in snippet.expansion.casefold()
                     or needle in snippet.category.casefold()
+                    or needle in snippet.description.casefold()
+                    or any(
+                        needle in term.casefold()
+                        for term in snippet.search_terms
+                    )
                     or any(
                         needle in application.casefold()
                         for application in snippet.applications
@@ -2102,24 +2350,35 @@ class MainWindow(QMainWindow):
             with (
                 QSignalBlocker(self.abbreviation_edit),
                 QSignalBlocker(self.category_combo),
+                QSignalBlocker(self.kind_combo),
                 QSignalBlocker(self.mode_combo),
                 QSignalBlocker(self.applications_edit),
+                QSignalBlocker(self.description_edit),
+                QSignalBlocker(self.search_terms_edit),
+                QSignalBlocker(self.priority_spin),
                 QSignalBlocker(self.enabled_checkbox),
                 QSignalBlocker(self.favorite_checkbox),
                 QSignalBlocker(self.expansion_edit),
             ):
                 self.abbreviation_edit.setText(snippet.abbreviation)
                 self.category_combo.setEditText(snippet.category)
+                self.kind_combo.setCurrentIndex(
+                    self.kind_combo.findData(snippet.kind.value)
+                )
                 self.mode_combo.setCurrentIndex(
                     self.mode_combo.findData(snippet.trigger_mode.value)
                 )
                 self.applications_edit.setText(", ".join(snippet.applications))
+                self.description_edit.setText(snippet.description)
+                self.search_terms_edit.setText(", ".join(snippet.search_terms))
+                self.priority_spin.setValue(snippet.priority)
                 self.enabled_checkbox.setChecked(snippet.enabled)
                 self.favorite_checkbox.setChecked(snippet.favorite)
                 self.expansion_edit.setPlainText(snippet.expansion)
             self.editor_panel.setEnabled(True)
             self._dirty = False
             self._update_stats_label(snippet)
+            self._update_kind_controls()
             self.update_preview()
         finally:
             self._selection_guard = False
@@ -2151,14 +2410,21 @@ class MainWindow(QMainWindow):
             self.editor_panel.setEnabled(True)
             self.abbreviation_edit.clear()
             self.category_combo.setEditText("")
+            self.kind_combo.setCurrentIndex(
+                self.kind_combo.findData(SnippetKind.LITERAL.value)
+            )
             self.mode_combo.setCurrentIndex(self.mode_combo.findData(TriggerMode.DELIMITER.value))
             self.applications_edit.clear()
+            self.description_edit.clear()
+            self.search_terms_edit.clear()
+            self.priority_spin.setValue(0)
             self.enabled_checkbox.setChecked(True)
             self.favorite_checkbox.setChecked(False)
             self.expansion_edit.setPlainText(expansion)
             self._dirty = bool(expansion)
             self.abbreviation_edit.setFocus()
             self.update_preview()
+            self._update_kind_controls()
         finally:
             self._selection_guard = False
         return True
@@ -2167,13 +2433,15 @@ class MainWindow(QMainWindow):
         if not self._is_new and self._current_id is None:
             return False
         abbreviation = self.abbreviation_edit.text()
-        issues = validate_abbreviation(abbreviation)
+        kind = SnippetKind(str(self.kind_combo.currentData()))
+        issues = validate_snippet_trigger(abbreviation, kind)
         if issues:
             key_by_code = {
                 "required": "required_abbreviation",
                 "whitespace": "whitespace_abbreviation",
                 "too_long": "long_abbreviation",
                 "control": "control_abbreviation",
+                "invalid_regex": "invalid_regex",
             }
             QMessageBox.warning(
                 self,
@@ -2208,6 +2476,36 @@ class MainWindow(QMainWindow):
                 self.t("invalid_applications"),
             )
             return False
+        try:
+            search_terms = normalize_search_terms(
+                tuple(
+                    item.strip()
+                    for item in self.search_terms_edit.text()
+                    .replace(";", ",")
+                    .split(",")
+                )
+            )
+        except ValueError as error:
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                str(error),
+            )
+            return False
+        template_issues = self._current_template_issues()
+        if template_issues:
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t(
+                    "template_issues",
+                    issues=", ".join(
+                        self._describe_issue(issue)
+                        for issue in template_issues
+                    ),
+                ),
+            )
+            return False
         snippet = Snippet(
             id=self._current_id,
             abbreviation=abbreviation,
@@ -2217,6 +2515,10 @@ class MainWindow(QMainWindow):
             category=category,
             favorite=self.favorite_checkbox.isChecked(),
             applications=applications,
+            kind=kind,
+            description=self.description_edit.text().strip(),
+            search_terms=search_terms,
+            priority=self.priority_spin.value(),
         )
         try:
             saved = self.storage.save_snippet(snippet)
@@ -2690,6 +2992,15 @@ class MainWindow(QMainWindow):
         self.expansion_edit.setTextCursor(cursor)
         self.expansion_edit.setFocus()
 
+    def open_template_assistant(self) -> None:
+        dialog = TemplateAssistantDialog(self.t, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        cursor = self.expansion_edit.textCursor()
+        cursor.insertText(dialog.token)
+        self.expansion_edit.setTextCursor(cursor)
+        self.expansion_edit.setFocus()
+
     def copy_preview(self) -> None:
         if not self.editor_panel.isEnabled():
             return
@@ -2729,13 +3040,39 @@ class MainWindow(QMainWindow):
         self._dirty = True
         self.update_preview()
 
+    def _snippet_kind_changed(self, *_args: object) -> None:
+        self._update_kind_controls()
+        self._editor_changed()
+
+    def _update_kind_controls(self) -> None:
+        if not hasattr(self, "kind_combo"):
+            return
+        is_regex = self.kind_combo.currentData() == SnippetKind.REGEX.value
+        self.abbreviation_edit.setMaxLength(512 if is_regex else 64)
+        self.abbreviation_label.setText(
+            self.t("regex_pattern") if is_regex else self.t("abbreviation")
+        )
+        self.priority_label.setVisible(is_regex)
+        self.priority_spin.setVisible(is_regex)
+
     def update_preview(self) -> None:
         if not hasattr(self, "preview_edit"):
             return
         template = self.expansion_edit.toPlainText()
-        rendered = render_template(template, clipboard_text="")
+        provider = self._editor_snippet_provider()
+        match_groups = self._editor_match_groups()
+        rendered = render_template(
+            template,
+            clipboard_text="",
+            snippet_provider=provider,
+            match_groups=match_groups,
+        )
         self.preview_edit.setPlainText(rendered.text)
-        issues = inspect_template(template)
+        issues = inspect_template(
+            template,
+            snippet_provider=provider,
+            match_groups=match_groups,
+        )
         if issues:
             descriptions = ", ".join(self._describe_issue(issue) for issue in issues)
             self.issue_label.setText(self.t("template_issues", issues=descriptions))
@@ -2745,6 +3082,42 @@ class MainWindow(QMainWindow):
             self.issue_label.setProperty("kind", "success")
         self.issue_label.style().unpolish(self.issue_label)
         self.issue_label.style().polish(self.issue_label)
+
+    def _current_template_issues(self) -> tuple[TemplateIssue, ...]:
+        return inspect_template(
+            self.expansion_edit.toPlainText(),
+            snippet_provider=self._editor_snippet_provider(),
+            match_groups=self._editor_match_groups(),
+        )
+
+    def _editor_snippet_provider(self) -> Callable[[str], str | None]:
+        current_abbreviation = self.abbreviation_edit.text()
+        current_expansion = self.expansion_edit.toPlainText()
+        snippets = {
+            snippet.abbreviation: snippet.expansion
+            for snippet in self.snippets
+            if snippet.enabled
+        }
+        if current_abbreviation:
+            snippets[current_abbreviation] = current_expansion
+        return snippets.get
+
+    def _editor_match_groups(self) -> dict[str, str]:
+        if self.kind_combo.currentData() != SnippetKind.REGEX.value:
+            return {}
+        try:
+            pattern = regex.compile(
+                self.abbreviation_edit.text(),
+                flags=regex.VERSION1,
+            )
+        except regex.error:
+            return {}
+        groups = {
+            str(index): ""
+            for index in range(0, pattern.groups + 1)
+        }
+        groups.update({name: "" for name in pattern.groupindex})
+        return groups
 
     def _describe_issue(self, issue: TemplateIssue) -> str:
         if issue.code == "unknown_token":

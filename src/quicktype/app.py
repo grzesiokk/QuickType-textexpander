@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QLocale, QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QSystemTrayIcon
 
 from .auto_backup import (
     AutomaticBackupManager,
@@ -21,12 +21,15 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
+from .matcher import ExpansionAction
 from .models import Snippet
 from .recovery import latest_recovery_backup, recover_database
 from .single_instance import SingleInstance
 from .storage import Storage
+from .template_engine import collect_form_fields
 from .ui import (
     EngineSignals,
+    ExpansionFormDialog,
     MainWindow,
     QuickAccessDialog,
     TrayController,
@@ -80,6 +83,7 @@ class QuickTypeController:
             on_error=self.signals.error.emit,
             on_quick_access=self.signals.quick_access.emit,
             on_clipboard_capture=self.signals.clipboard_capture.emit,
+            on_form_request=self.signals.form_requested.emit,
             quick_access_hotkey=quick_access_hotkey,
             clipboard_capture_hotkey=clipboard_capture_hotkey,
             excluded_processes=excluded_processes,
@@ -141,8 +145,10 @@ class QuickTypeController:
         self.signals.clipboard_capture.connect(
             self.new_snippet_from_clipboard
         )
+        self.signals.form_requested.connect(self._on_form_requested)
         self.quick_access.snippet_chosen.connect(self._quick_access_chosen)
         self.application.aboutToQuit.connect(self.shutdown)
+        self._form_values: dict[tuple[str, str], str] = {}
 
         self.engine.set_active(active)
         self.engine.start()
@@ -291,6 +297,73 @@ class QuickTypeController:
             120,
             lambda: self._insert_quick_access_snippet(snippet, target_window),
         )
+
+    def _on_form_requested(self, action: object, target_window: int) -> None:
+        if not isinstance(action, ExpansionAction):
+            return
+        provider = self.engine.available_snippet_provider(target_window)
+        fields, issues = collect_form_fields(
+            action.snippet.expansion,
+            snippet_provider=provider,
+        )
+        if issues:
+            self._cancel_form_action(action, target_window)
+            self._on_engine_error(issues[0].message)
+            return
+        require_active = bool(
+            action.delete_count
+            or action.fallback_text
+            or action.fallback_vk is not None
+        )
+        if not fields:
+            self.engine.expand_action(
+                action,
+                target_window,
+                require_active=require_active,
+            )
+            return
+        remembered = {
+            field.identifier: self._form_values.get(
+                (action.snippet.abbreviation, field.identifier),
+                field.default,
+            )
+            for field in fields
+        }
+        dialog = ExpansionFormDialog(
+            self.translator,
+            fields,
+            remembered_values=remembered,
+            parent=self.window,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._cancel_form_action(action, target_window)
+            return
+        values = dialog.values
+        for identifier, value in values.items():
+            self._form_values[(action.snippet.abbreviation, identifier)] = value
+        if not restore_foreground_window(target_window):
+            self._cancel_form_action(action, target_window)
+            self.window.status_message.setText(
+                self.translator("quick_access_target_error")
+            )
+            return
+        QTimer.singleShot(
+            120,
+            lambda: self.engine.expand_action(
+                action,
+                target_window,
+                values=values,
+                require_active=require_active,
+            ),
+        )
+
+    def _cancel_form_action(
+        self,
+        action: ExpansionAction,
+        target_window: int,
+    ) -> None:
+        if restore_foreground_window(target_window):
+            QTimer.singleShot(120, lambda: self.engine.cancel_action(action))
 
     def _insert_quick_access_snippet(self, snippet: object, target_window: int) -> None:
         if not isinstance(snippet, Snippet):
