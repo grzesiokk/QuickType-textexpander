@@ -150,3 +150,22 @@ def test_invalid_or_empty_regex_does_not_break_literal_matching() -> None:
 
     assert action is not None
     assert action.snippet.expansion == "valid"
+
+
+def test_pathological_regex_is_bounded_by_match_timeout() -> None:
+    matcher = SnippetMatcher(
+        [
+            regex_snippet(
+                r"(?:(?:a|aa)+)b",
+                TriggerMode.IMMEDIATE,
+                "should not match",
+            )
+        ]
+    )
+
+    started = perf_counter()
+    action = feed(matcher, ("a" * 255) + "x")
+    elapsed = perf_counter() - started
+
+    assert action is None
+    assert elapsed < 2.0

@@ -771,7 +771,11 @@ class Storage:
         settings = state.get("settings", [])
         disabled_items = state.get("disabled_items", [])
         usage = state.get("usage", [])
-        if not all(isinstance(value, list) for value in (settings, disabled_items, usage)):
+        if (
+            not isinstance(settings, list)
+            or not isinstance(disabled_items, list)
+            or not isinstance(usage, list)
+        ):
             raise ValueError("Invalid built-in library state.")
         with self._connection() as connection:
             connection.execute("DELETE FROM builtin_library_settings")

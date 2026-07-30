@@ -1,5 +1,8 @@
 # QuickType built-in data notices
 
+The bundled catalogs were generated on 2026-07-30 from source files pinned by
+SHA-256 checksums in `scripts/build_builtin_data.py`.
+
 ## Unicode Emoji and CLDR
 
 Emoji sequences, Polish names, keywords, and territory names are derived from

@@ -7,6 +7,14 @@ All phases planned for the local Windows 11 edition are complete.
 - **Core expansion:** global Windows keyboard hook, Unicode insertion, immediate
   and delimiter triggers, word boundaries, and cursor restoration.
 - **Templates:** date, time, clipboard, cursor marker, validation, and preview.
+- **Advanced templates:** one-window forms, session variables, safe decimal
+  calculations, snippet composition with cycle limits, and a marker assistant.
+- **Bounded regex rules:** named and numbered match groups, priority, timeout,
+  and literal-snippet precedence.
+- **Built-in Polish catalogs:** opt-in autocorrect profiles, postal codes,
+  Emoji 17.0, national flags, stable per-item exceptions, and data notices.
+- **Virtual quick search:** diacritic-insensitive phrases, multiple terms,
+  source scopes, recent items, ranking, and a 200-result display limit.
 - **Desktop experience:** Polish and English UI, tray operation, pause, autostart,
   single instance, and portable one-file build.
 - **Safety:** password-field detection, excluded applications, injected-event
@@ -65,6 +73,6 @@ All phases planned for the local Windows 11 edition are complete.
 ## Intentionally outside this edition
 
 Cloud synchronization, shared team libraries, images, arbitrary scripts,
-interactive forms, and macOS support are not planned for this private offline
+AI features, and macOS support are not planned for this private offline
 edition. Keeping these features out preserves the application's local-only
 privacy and compact scope.

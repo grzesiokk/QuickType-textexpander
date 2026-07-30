@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime
 from decimal import Decimal, DivisionByZero, InvalidOperation, localcontext
 from enum import StrEnum
@@ -131,18 +132,12 @@ class _RenderState:
     values: dict[str, str]
     match_groups: dict[str, str]
     snippet_provider: SnippetProvider | None
-    output: list[str] | None = None
+    output: list[str] = dataclass_field(default_factory=list)
     output_length: int = 0
-    issues: list[TemplateIssue] | None = None
-    cursor_positions: list[int] | None = None
-
-    def __post_init__(self) -> None:
-        self.output = []
-        self.issues = []
-        self.cursor_positions = []
+    issues: list[TemplateIssue] = dataclass_field(default_factory=list)
+    cursor_positions: list[int] = dataclass_field(default_factory=list)
 
     def append(self, value: str) -> None:
-        assert self.output is not None
         self.output.append(value)
         self.output_length += len(value)
 
@@ -173,9 +168,6 @@ def _render_token(
     *,
     stack: tuple[str, ...],
 ) -> str | None:
-    assert state.issues is not None
-    assert state.cursor_positions is not None
-
     if token == "date":
         return state.now.strftime("%d.%m.%Y")
     if token.startswith("date:"):
@@ -239,8 +231,8 @@ def _render_token(
             return None
     if token.startswith("calc-match:"):
         identifier = token[11:].strip()
-        expression = state.match_groups.get(identifier)
-        if expression is None:
+        match_expression = state.match_groups.get(identifier)
+        if match_expression is None:
             state.issues.append(
                 TemplateIssue(
                     "missing_match",
@@ -250,7 +242,7 @@ def _render_token(
             )
             return None
         try:
-            return calculate_expression(expression)
+            return calculate_expression(match_expression)
         except ValueError as error:
             state.issues.append(TemplateIssue("calculation_error", token, str(error)))
             return None

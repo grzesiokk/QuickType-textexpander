@@ -311,6 +311,74 @@ def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None
     assert schema_version == "7"
 
 
+def test_v5_database_migrates_to_advanced_schema_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-v5.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE snippets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            abbreviation TEXT NOT NULL UNIQUE COLLATE BINARY,
+            expansion TEXT NOT NULL,
+            trigger_mode TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            usage_count INTEGER NOT NULL DEFAULT 0,
+            last_used_at TEXT,
+            category TEXT NOT NULL DEFAULT '',
+            favorite INTEGER NOT NULL DEFAULT 0,
+            applications TEXT NOT NULL DEFAULT '[]'
+        );
+        INSERT INTO metadata VALUES('schema_version', '5');
+        INSERT INTO snippets(
+            abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
+            usage_count, last_used_at, category, favorite, applications
+        ) VALUES(
+            ';firma', 'Zażółć gęślą', 'delimiter', 1,
+            '2026-01-01T10:00:00', '2026-01-02T10:00:00',
+            12, '2026-01-03T10:00:00', 'Praca', 1, '["WINWORD.EXE"]'
+        );
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    storage = Storage(path)
+    storage.initialize()
+    snippet = storage.list_snippets()[0]
+
+    assert snippet.abbreviation == ";firma"
+    assert snippet.expansion == "Zażółć gęślą"
+    assert snippet.usage_count == 12
+    assert snippet.category == "Praca"
+    assert snippet.favorite
+    assert snippet.applications == ("WINWORD.EXE",)
+    assert snippet.kind == SnippetKind.LITERAL
+    assert snippet.description == ""
+    assert snippet.search_terms == ()
+    assert snippet.priority == 0
+    assert storage.get_builtin_library_settings("emoji") is None
+
+    connection = sqlite3.connect(path)
+    schema_version = connection.execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()[0]
+    builtin_table = connection.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'builtin_library_settings'
+        """
+    ).fetchone()
+    connection.close()
+    assert schema_version == "7"
+    assert builtin_table == ("builtin_library_settings",)
+
+
 def test_advanced_snippet_fields_are_persisted(storage: Storage) -> None:
     saved = storage.save_snippet(
         Snippet(

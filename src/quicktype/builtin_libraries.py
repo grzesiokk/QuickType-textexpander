@@ -376,10 +376,16 @@ def _load_catalog(
         profile = raw.get("profile")
         search_text = raw.get("search", "")
         if (
-            not all(
-                isinstance(value, str) and value
-                for value in (item_id, title, expansion, slug, profile)
-            )
+            not isinstance(item_id, str)
+            or not item_id
+            or not isinstance(title, str)
+            or not title
+            or not isinstance(expansion, str)
+            or not expansion
+            or not isinstance(slug, str)
+            or not slug
+            or not isinstance(profile, str)
+            or not profile
             or not isinstance(keywords, list)
             or not all(isinstance(value, str) for value in keywords)
             or not isinstance(search_text, str)

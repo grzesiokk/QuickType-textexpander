@@ -45,6 +45,17 @@ SOURCES = {
         "org/languagetool/rules/pl/grammar.xml"
     ),
 }
+SOURCE_SHA256 = {
+    "emoji-test.txt": "1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda",
+    "annotations-pl.json": "81420256d40acb05a9a512cdde5c67bafa6a373df51c93a83f02ecc200cba6fa",
+    "annotations-derived-pl.json": (
+        "489db8825f8a02737595a94b0b0e6a165acbc3705f6207a4fe0aa064a645362d"
+    ),
+    "territories-pl.json": "ae91e6cb2c761bc158f08ae3bf9a6d495b05914ac945cc6eea1bee2b8b532aab",
+    "PL.zip": "57faf0d308aeb8336e48cbf34869c5fbf871562f89187322699eecc9315de47e",
+    "common_words.txt": "f984a07cfd89254557e7e1f7cdbf1bf96b0fe281bb7dcbbf715b0ff977227a0b",
+    "grammar.xml": "4755d9deaa6a52621428298aec2d4a70f6b49c2d78bf010aa864ba897d7f64b7",
+}
 POLISH_LETTERS_RE = re.compile(r"[a-ząćęłńóśźż-]+\Z", re.IGNORECASE)
 VOIVODESHIPS = {
     "72": "dolnośląskie",
@@ -219,11 +230,15 @@ def main() -> int:
 def _download_sources(source_dir: Path) -> None:
     for name, url in SOURCES.items():
         destination = source_dir / name
-        if destination.exists():
-            continue
-        print(f"Downloading {url}")
-        with urllib.request.urlopen(url, timeout=60) as response:
-            destination.write_bytes(response.read())
+        if not destination.exists():
+            print(f"Downloading {url}")
+            with urllib.request.urlopen(url, timeout=60) as response:
+                destination.write_bytes(response.read())
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        if digest != SOURCE_SHA256[name]:
+            raise ValueError(
+                f"Source checksum mismatch for {name}: {digest}"
+            )
 
 
 def _build_emoji_and_flags(
