@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from quicktype.template_engine import inspect_template, render_template
+import pytest
+
+from quicktype.template_engine import (
+    FormFieldKind,
+    calculate_expression,
+    collect_form_fields,
+    inspect_template,
+    render_template,
+)
 
 NOW = datetime(2026, 7, 28, 14, 5, 9)
 
@@ -45,3 +53,94 @@ def test_clipboard_provider_failure_is_safe() -> None:
 
 def test_inspection_does_not_require_live_clipboard() -> None:
     assert inspect_template("{{clipboard}}") == ()
+
+
+def test_collects_and_renders_form_fields_and_variables() -> None:
+    template = (
+        "{{input:name|Klient|Anna}} / "
+        "{{choice:plan|Plan|Basic|Pro}} / "
+        "{{check:vip|VIP|tak|nie}} / {{var:name}}"
+    )
+
+    fields, issues = collect_form_fields(template)
+    rendered = render_template(
+        template,
+        values={"name": "Jan", "plan": "Pro", "vip": "nie"},
+        now=NOW,
+    )
+
+    assert not issues
+    assert [field.kind for field in fields] == [
+        FormFieldKind.INPUT,
+        FormFieldKind.CHOICE,
+        FormFieldKind.CHECK,
+    ]
+    assert rendered.text == "Jan / Pro / nie / Jan"
+    assert not rendered.issues
+
+
+def test_field_parts_support_escaped_pipes_and_backslashes() -> None:
+    fields, issues = collect_form_fields(r"{{input:path|Ścieżka|C:\\Temp\|Archiwum}}")
+
+    assert not issues
+    assert fields[0].default == r"C:\Temp|Archiwum"
+
+
+def test_safe_calculation_uses_decimal_variables() -> None:
+    assert calculate_expression("(quantity * price) + 0.2", {"quantity": "3", "price": "1,10"}) == "3.5"
+    assert render_template(
+        "{{calc:quantity * price}}",
+        values={"quantity": "3", "price": "2.5"},
+        now=NOW,
+    ).text == "7.5"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "__import__('os').system('whoami')",
+        "open('secret')",
+        "2 ** 999",
+        "1 / 0",
+    ],
+)
+def test_calculation_rejects_unsafe_or_unbounded_expressions(expression: str) -> None:
+    with pytest.raises(ValueError):
+        calculate_expression(expression)
+
+
+def test_snippet_composition_and_cycle_detection() -> None:
+    snippets = {
+        "address": "Warszawa{{cursor}}",
+        "signature": "Pozdrawiam\n{{snippet:address}}",
+        "cycle-a": "{{snippet:cycle-b}}",
+        "cycle-b": "{{snippet:cycle-a}}",
+    }
+
+    rendered = render_template(
+        "Start\n{{snippet:signature}}",
+        snippet_provider=snippets.get,
+        now=NOW,
+    )
+    cycle = render_template(
+        "{{snippet:cycle-a}}",
+        snippet_provider=snippets.get,
+        now=NOW,
+    )
+
+    assert rendered.text == "Start\nPozdrawiam\nWarszawa"
+    assert rendered.cursor_present
+    assert rendered.cursor_from_end == 0
+    assert not rendered.issues
+    assert any(issue.code == "snippet_cycle" for issue in cycle.issues)
+
+
+def test_match_groups_and_comments_are_rendered() -> None:
+    rendered = render_template(
+        "Nr {{match:number}}{{-- internal note --}}",
+        match_groups={"number": "123"},
+        now=NOW,
+    )
+
+    assert rendered.text == "Nr 123"
+    assert not rendered.issues

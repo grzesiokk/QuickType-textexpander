@@ -13,11 +13,16 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QMessageBox,
+    QToolBar,
 )
 
 from quicktype.auto_backup import AutomaticBackupManager
 from quicktype.backup import export_backup, import_backup
 from quicktype.backup_catalog import BackupKind
+from quicktype.builtin_libraries import (
+    BuiltinCatalog,
+    BuiltinLibraryId,
+)
 from quicktype.i18n import Translator
 from quicktype.importing import ImportMode, analyze_import
 from quicktype.models import Snippet, TriggerMode
@@ -25,6 +30,7 @@ from quicktype.recovery import RestoreChangeKind
 from quicktype.storage import Storage
 from quicktype.ui import (
     BackupRestoreDialog,
+    BuiltinLibraryManagerDialog,
     CategoryManagerDialog,
     DataMaintenanceDialog,
     ImportPreviewDialog,
@@ -36,6 +42,46 @@ from quicktype.ui import (
     apply_application_style,
     normalize_theme,
 )
+
+
+def test_library_manager_and_menu_keep_large_catalog_readable(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    catalog = BuiltinCatalog(storage)
+    manager = BuiltinLibraryManagerDialog(catalog, Translator("en"))
+    changed: list[bool] = []
+    manager.settings_changed.connect(lambda: changed.append(True))
+    emoji_index = manager.library_combo.findData(BuiltinLibraryId.EMOJI.value)
+    manager.library_combo.setCurrentIndex(emoji_index)
+
+    assert manager.table.rowCount() <= 300
+    manager.enabled_checkbox.setChecked(True)
+    manager.save_settings()
+    assert changed
+    assert catalog.settings(BuiltinLibraryId.EMOJI).enabled
+
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        catalog=catalog,
+        engine_active=True,
+        autostart=False,
+    )
+    toolbar = window.findChild(QToolBar)
+    assert toolbar is not None
+    assert window.file_menu.title() == "File"
+    assert window.snippets_menu.title() == "Snippets"
+    assert window.libraries_menu.title() == "Libraries"
+    assert window.tools_menu.title() == "Tools"
+    assert window.quick_search_action in toolbar.actions()
+    assert window.import_action not in toolbar.actions()
+
+    manager.deleteLater()
+    window.deleteLater()
+    application.processEvents()
 
 
 def test_import_preview_shows_conflicts_and_mode_choice(tmp_path: Path) -> None:
@@ -213,15 +259,15 @@ def test_quick_access_filters_enabled_snippets_and_emits_choice(tmp_path: Path) 
     dialog.snippet_chosen.connect(lambda snippet, target: chosen.append((snippet, target)))
 
     dialog.show_for_window(12345)
-    assert dialog.table.rowCount() == 2
-    assert dialog.table.item(0, 0).text() == "★"
-    assert dialog.table.item(0, 1).text() == ";mail"
-    assert dialog.table.item(1, 1).text() == ";often"
+    assert dialog.model.rowCount() == 2
+    assert dialog.model.index(0, 0).data() == "★ ;mail"
+    assert dialog.model.index(0, 2).data() == ";mail"
+    assert dialog.model.index(1, 2).data() == ";often"
     assert "Ctrl+Alt+Space" in dialog.hint_label.text()
     dialog.set_hotkey("alt_shift_space")
     assert "Alt+Shift+Space" in dialog.hint_label.text()
     dialog.apply_filter("work")
-    assert not dialog.table.isRowHidden(0)
+    assert dialog.model.rowCount() == 1
     dialog.choose_current()
 
     assert chosen == [(work, 12345)]

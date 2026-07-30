@@ -12,7 +12,7 @@ Run the same quality gates used by CI:
 
 ```powershell
 .\.venv\Scripts\ruff.exe check src tests scripts
-.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
 .\.venv\Scripts\python.exe -m pytest --cov=quicktype --cov-report=term --cov-fail-under=72
 .\.venv\Scripts\pip-audit.exe --local --skip-editable --progress-spinner off
 ```
@@ -34,9 +34,12 @@ Before publishing a release:
 1. Start `dist\QuickType.exe` from a writable folder and confirm that
    `QuickTypeData\quicktype.sqlite3` is created.
 2. Test immediate and delimiter snippets in Notepad.
-3. Test multiline text, Polish characters, clipboard, date, time, and
-   `{{cursor}}`.
-4. Test the quick-access shortcut in Word or a browser.
+3. Test multiline text, Polish characters, clipboard, date, time,
+   `{{cursor}}`, one-window forms, choice and check fields, calculations, and
+   composed snippets. Cancel a form and confirm the document is unchanged.
+4. Test the quick-access shortcut in Word or a browser. Verify multi-word and
+   quoted queries, Polish-diacritic normalization, `.`, `emoji:`, `flaga:`,
+   and `kod:`. Confirm that no more than 200 rows are shown.
 5. Confirm application-specific snippets and excluded applications.
 6. Confirm pause/resume, tray reopening, single instance, and optional
    autostart.
@@ -88,3 +91,19 @@ Before publishing a release:
 21. On disposable data, corrupt a copy of `quicktype.sqlite3`, start QuickType,
     accept recovery, and verify that the newest valid JSON backup is restored
     while the damaged database is preserved under a `*-corrupt-*` name.
+22. In Libraries, verify every catalog is disabled on a fresh database. Enable
+    both autocorrect profiles and test lower case, first-letter capitalization,
+    ALL CAPS, a disabled exception, a word boundary, and Polish diacritics.
+23. Search postal codes by code, locality, county, and voivodeship. Confirm the
+    inserted value contains only `NN-NNN` and the result preview identifies the
+    locality and region.
+24. Insert emoji and national flags by direct abbreviation and Quick Search.
+    Change a prefix, verify conflicting prefixes are rejected, disable one
+    item, and copy another item into My snippets.
+25. Test a valid regex rule with numbered and named groups, competing regex
+    priorities, literal precedence, an invalid pattern, an invalid group
+    reference, and a pattern that reaches the match timeout.
+26. Enable inline calculations and test `10+5=?`, decimal input, division by
+    zero, excessive exponentiation, and an invalid expression.
+27. Open Help → Data sources and licenses and verify the bundled Unicode,
+    GeoNames, and LanguageTool notices.

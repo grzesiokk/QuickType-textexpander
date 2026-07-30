@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from .backup import export_backup, import_backup
+from .backup import export_backup, import_backup, import_library_state
 from .backup_catalog import list_backup_entries
 from .models import Snippet
 from .storage import Storage
@@ -108,8 +108,15 @@ def restore_backup(storage: Storage, source: Path) -> tuple[int, Path]:
     safety_copy = backup_directory / (
         f"QuickType-before-restore-{datetime.now():%Y%m%d-%H%M%S-%f}.json"
     )
-    export_backup(safety_copy, current_snippets)
+    export_backup(
+        safety_copy,
+        current_snippets,
+        library_state=storage.export_library_state(),
+    )
     added, _skipped = storage.import_snippets(restored_snippets, replace=True)
+    library_state = import_library_state(Path(source))
+    if library_state is not None:
+        storage.restore_library_state(library_state)
     return added, safety_copy
 
 
@@ -124,6 +131,7 @@ def recover_database(
 ) -> DatabaseRecoveryResult:
     path = Path(database)
     snippets = import_backup(source) if source is not None else []
+    library_state = import_library_state(source) if source is not None else None
     path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     quarantine = path.with_name(
@@ -142,6 +150,8 @@ def recover_database(
         storage.initialize()
         if snippets:
             storage.import_snippets(snippets, replace=True)
+        if library_state is not None:
+            storage.restore_library_state(library_state)
     except Exception:
         for suffix in ("", "-wal", "-shm"):
             created = Path(f"{path}{suffix}")
@@ -166,6 +176,10 @@ RESTORABLE_FIELDS = (
     "category",
     "favorite",
     "applications",
+    "kind",
+    "description",
+    "search_terms",
+    "priority",
 )
 
 

@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from quicktype.backup import BackupFormatError, export_backup, import_backup
-from quicktype.models import Snippet, TriggerMode
+from quicktype.backup import (
+    BackupFormatError,
+    export_backup,
+    import_backup,
+    import_library_state,
+)
+from quicktype.models import Snippet, SnippetKind, TriggerMode
 
 
 def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
@@ -24,6 +29,10 @@ def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
         category="Praca",
         favorite=True,
         applications=("Code.exe", "WINWORD.EXE"),
+        kind=SnippetKind.REGEX,
+        description="Signature rule",
+        search_terms=("email", "formal"),
+        priority=10,
     )
     path = tmp_path / "backup.json"
     export_backup(path, [source])
@@ -38,6 +47,10 @@ def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
     assert imported[0].category == "Praca"
     assert imported[0].favorite
     assert imported[0].applications == ("Code.exe", "WINWORD.EXE")
+    assert imported[0].kind == SnippetKind.REGEX
+    assert imported[0].description == "Signature rule"
+    assert imported[0].search_terms == ("email", "formal")
+    assert imported[0].priority == 10
 
 
 def test_old_backup_without_category_remains_compatible(tmp_path: Path) -> None:
@@ -62,6 +75,10 @@ def test_old_backup_without_category_remains_compatible(tmp_path: Path) -> None:
     assert import_backup(path)[0].category == ""
     assert not import_backup(path)[0].favorite
     assert import_backup(path)[0].applications == ()
+    assert import_backup(path)[0].kind == SnippetKind.LITERAL
+    assert import_backup(path)[0].description == ""
+    assert import_backup(path)[0].search_terms == ()
+    assert import_backup(path)[0].priority == 0
 
 
 def test_backup_is_utf8_and_human_readable(tmp_path: Path) -> None:
@@ -73,6 +90,26 @@ def test_backup_is_utf8_and_human_readable(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "Zażółć gęślą" in text
     assert json.loads(text)["format"] == "quicktype-backup"
+
+
+def test_backup_v2_can_include_builtin_library_state(tmp_path: Path) -> None:
+    path = tmp_path / "full-backup.json"
+    state = {
+        "settings": [
+            {
+                "library_id": "emoji",
+                "enabled": True,
+                "profile": "full",
+                "prefix": ":",
+            }
+        ],
+        "disabled_items": [],
+        "usage": [],
+    }
+
+    export_backup(path, [], library_state=state)
+
+    assert import_library_state(path) == state
 
 
 @pytest.mark.parametrize(

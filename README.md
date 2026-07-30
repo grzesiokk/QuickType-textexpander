@@ -10,9 +10,9 @@ Python on the target computer.
 
 ![QuickType running on Windows 11](docs/quicktype-screenshot.png)
 
-The screenshot shows QuickType 1.25.0 with searchable snippets, categories,
-usage statistics, application rules, bulk actions, backup tools, and a live
-preview of dynamic variables.
+QuickType 2.0 adds optional Polish productivity libraries, virtual quick
+search, forms, calculations, snippet composition, and bounded regular
+expressions while remaining fully local.
 
 ## Ready-to-use application
 
@@ -89,6 +89,23 @@ Supported variables:
 | `{{time:%H:%M:%S}}` | Time with a custom format |
 | `{{clipboard}}` | Plain text currently in the clipboard |
 | `{{cursor}}` | Final cursor position; may occur once |
+| `{{input:id\|Label\|default}}` | Text field shown before insertion |
+| `{{choice:id\|Label\|one\|two}}` | Choice shown before insertion |
+| `{{check:id\|Label\|yes\|no}}` | Checkbox shown before insertion |
+| `{{var:id}}` | Value of a form field |
+| `{{calc:expression}}` | Decimal calculation without `eval` |
+| `{{snippet:abbreviation}}` | Expansion of another enabled snippet |
+| `{{match:1}}` / `{{match:name}}` | Numbered or named regex group |
+
+The template assistant inserts and escapes advanced markers. All fields from
+one expansion appear in a single dialog. Values are remembered only until
+QuickType exits, and cancelling the dialog leaves the target document
+unchanged.
+
+Snippets may be ordinary literal abbreviations or bounded regex rules. Regex
+matching examines only the final 256 typed characters, applies a timeout, and
+always loses to an ordinary abbreviation. Higher-priority regex rules win over
+lower-priority rules.
 
 The interface can be switched between Polish and English in Settings.
 Closing the main window keeps QuickType in the system tray. The tray menu can
@@ -96,13 +113,36 @@ pause expansion, enable autostart, reopen the window, or quit completely.
 
 ## Quick access
 
-Press **Ctrl+Alt+Space** in another application to open a searchable list of
-enabled snippets. Search by abbreviation, category, or expansion text, then
-press **Enter** to insert the selected snippet into the original window.
+Press **Ctrl+Alt+Space** in another application to open a virtual searchable
+list of enabled snippets and enabled built-in libraries. Search is
+diacritic-insensitive, supports multiple words and quoted phrases, and returns
+at most 200 ranked results. Use `emoji:`, `flaga:`, or `kod:` to narrow the
+source, and `.` to show recently used items. Press **Enter** to insert the
+selected result into the original window.
 Template variables and the cursor marker are rendered in the same way as with
 typed abbreviations. **Esc** closes the quick-access window without inserting.
 Mark important snippets as favorites to keep them at the top of this list.
 Other snippets are ordered by their usage count.
+
+## Built-in libraries
+
+Open **Libraries** / **Biblioteki** to configure the catalogs included in
+`QuickType.exe`. They are read-only, versioned separately from user snippets,
+and disabled by default, including after an upgrade:
+
+- Polish autocorrect: an 800-rule conservative profile or a 3,000-rule
+  extended profile, with first-letter and all-caps preservation;
+- Polish postal codes: approximate GeoNames results searchable by code,
+  locality, county, and voivodeship;
+- fully qualified Emoji 17.0 sequences with Polish CLDR 48 names and keywords;
+- national flags with Polish country names and ISO codes;
+- optional inline decimal calculations triggered by an expression ending in
+  `=?`.
+
+Each direct library has a configurable prefix. Individual items can be
+disabled by stable identifier or copied into **My snippets** for editing.
+Postal data is a convenience catalog and does not replace official address
+verification. The app's **Help** menu includes source and license notices.
 
 The global shortcut can be changed immediately in Settings to
 **Ctrl+Shift+Space**, **Alt+Shift+Space**, or disabled completely.
@@ -191,7 +231,7 @@ to both typed abbreviations and the quick-access picker.
 
 ## Data maintenance
 
-Open **Data** / **Dane** from the main toolbar to see the number of snippets,
+Open **Data** / **Dane** from the **Tools** menu to see the number of snippets,
 the number of JSON backups, the SQLite database size, and the exact data-folder
 path. From the same window you can:
 
@@ -246,7 +286,7 @@ Run all local quality gates:
 
 ```powershell
 .\.venv\Scripts\ruff.exe check src tests scripts
-.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
 .\.venv\Scripts\python.exe -m pytest --cov=quicktype --cov-fail-under=72
 .\.venv\Scripts\pip-audit.exe --local --skip-editable
 ```

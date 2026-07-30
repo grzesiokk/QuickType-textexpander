@@ -8,12 +8,13 @@ from pathlib import Path
 
 from PySide6.QtCore import QLocale, QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QSystemTrayIcon
 
 from .auto_backup import (
     AutomaticBackupManager,
     normalize_backup_retention,
 )
+from .builtin_libraries import BuiltinCatalog
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
 from .hook import KeyboardHookEngine
 from .hotkeys import (
@@ -21,12 +22,15 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
+from .matcher import ExpansionAction
 from .models import Snippet
 from .recovery import latest_recovery_backup, recover_database
 from .single_instance import SingleInstance
 from .storage import Storage
+from .template_engine import collect_form_fields
 from .ui import (
     EngineSignals,
+    ExpansionFormDialog,
     MainWindow,
     QuickAccessDialog,
     TrayController,
@@ -34,6 +38,7 @@ from .ui import (
     normalize_theme,
 )
 from .windows_platform import (
+    current_foreground_window,
     is_autostart_enabled,
     repair_autostart_if_enabled,
     restore_foreground_window,
@@ -74,12 +79,14 @@ class QuickTypeController:
         )
 
         self.signals = EngineSignals()
+        self.catalog = BuiltinCatalog(self.storage)
         self.engine = KeyboardHookEngine(
-            self.storage.list_snippets(),
+            self.storage.list_snippets() + self.catalog.runtime_snippets(),
             on_expansion=self.signals.expanded.emit,
             on_error=self.signals.error.emit,
             on_quick_access=self.signals.quick_access.emit,
             on_clipboard_capture=self.signals.clipboard_capture.emit,
+            on_form_request=self.signals.form_requested.emit,
             quick_access_hotkey=quick_access_hotkey,
             clipboard_capture_hotkey=clipboard_capture_hotkey,
             excluded_processes=excluded_processes,
@@ -87,6 +94,7 @@ class QuickTypeController:
         self.window = MainWindow(
             self.storage,
             self.translator,
+            catalog=self.catalog,
             engine_active=active,
             autostart=autostart,
             automatic_backups=automatic_backups,
@@ -99,6 +107,7 @@ class QuickTypeController:
         self.quick_access = QuickAccessDialog(
             self.storage,
             self.translator,
+            self.catalog,
             quick_access_hotkey=quick_access_hotkey,
         )
         self.tray = TrayController(
@@ -134,6 +143,8 @@ class QuickTypeController:
             self.set_clipboard_capture_hotkey
         )
         self.window.snippets_changed.connect(self.refresh_snippets)
+        self.window.builtin_libraries_changed.connect(self.refresh_snippets)
+        self.window.quick_search_requested.connect(self.open_quick_search)
         self.window.quit_requested.connect(self.quit)
         self.signals.expanded.connect(self._on_expanded)
         self.signals.error.connect(self._on_engine_error)
@@ -141,8 +152,10 @@ class QuickTypeController:
         self.signals.clipboard_capture.connect(
             self.new_snippet_from_clipboard
         )
+        self.signals.form_requested.connect(self._on_form_requested)
         self.quick_access.snippet_chosen.connect(self._quick_access_chosen)
         self.application.aboutToQuit.connect(self.shutdown)
+        self._form_values: dict[tuple[str, str], str] = {}
 
         self.engine.set_active(active)
         self.engine.start()
@@ -186,6 +199,15 @@ class QuickTypeController:
         self.window.show_and_activate()
         self.window.new_snippet_from_clipboard()
 
+    def open_quick_search(self) -> None:
+        self.window.hide()
+        QTimer.singleShot(180, self._open_quick_search_for_foreground)
+
+    def _open_quick_search_for_foreground(self) -> None:
+        target_window = current_foreground_window()
+        if target_window:
+            self.quick_access.show_for_window(target_window)
+
     def set_active(self, active: bool) -> None:
         self.engine.set_active(active)
         self.storage.set_setting("engine_active", "1" if active else "0")
@@ -207,7 +229,7 @@ class QuickTypeController:
 
     def refresh_snippets(self) -> None:
         snippets = self.storage.list_snippets()
-        self.engine.replace_snippets(snippets)
+        self.engine.replace_snippets(snippets + self.catalog.runtime_snippets())
         if self.window.automatic_backups:
             self._create_automatic_backup(snippets)
 
@@ -272,7 +294,14 @@ class QuickTypeController:
     def _on_expanded(self, snippet: object) -> None:
         abbreviation = getattr(snippet, "abbreviation", "")
         snippet_id = getattr(snippet, "id", None)
-        if isinstance(snippet_id, int):
+        source_library = getattr(snippet, "source_library", "")
+        source_item_id = getattr(snippet, "source_item_id", "")
+        if source_library and source_item_id:
+            self.storage.record_builtin_expansion(
+                str(source_library),
+                str(source_item_id),
+            )
+        elif isinstance(snippet_id, int):
             updated = self.storage.record_expansion(snippet_id)
             if updated is not None:
                 self.window.refresh_usage(updated)
@@ -291,6 +320,73 @@ class QuickTypeController:
             120,
             lambda: self._insert_quick_access_snippet(snippet, target_window),
         )
+
+    def _on_form_requested(self, action: object, target_window: int) -> None:
+        if not isinstance(action, ExpansionAction):
+            return
+        provider = self.engine.available_snippet_provider(target_window)
+        fields, issues = collect_form_fields(
+            action.snippet.expansion,
+            snippet_provider=provider,
+        )
+        if issues:
+            self._cancel_form_action(action, target_window)
+            self._on_engine_error(issues[0].message)
+            return
+        require_active = bool(
+            action.delete_count
+            or action.fallback_text
+            or action.fallback_vk is not None
+        )
+        if not fields:
+            self.engine.expand_action(
+                action,
+                target_window,
+                require_active=require_active,
+            )
+            return
+        remembered = {
+            field.identifier: self._form_values.get(
+                (action.snippet.abbreviation, field.identifier),
+                field.default,
+            )
+            for field in fields
+        }
+        dialog = ExpansionFormDialog(
+            self.translator,
+            fields,
+            remembered_values=remembered,
+            parent=self.window,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._cancel_form_action(action, target_window)
+            return
+        values = dialog.values
+        for identifier, value in values.items():
+            self._form_values[(action.snippet.abbreviation, identifier)] = value
+        if not restore_foreground_window(target_window):
+            self._cancel_form_action(action, target_window)
+            self.window.status_message.setText(
+                self.translator("quick_access_target_error")
+            )
+            return
+        QTimer.singleShot(
+            120,
+            lambda: self.engine.expand_action(
+                action,
+                target_window,
+                values=values,
+                require_active=require_active,
+            ),
+        )
+
+    def _cancel_form_action(
+        self,
+        action: ExpansionAction,
+        target_window: int,
+    ) -> None:
+        if restore_foreground_window(target_window):
+            QTimer.singleShot(120, lambda: self.engine.cancel_action(action))
 
     def _insert_quick_access_snippet(self, snippet: object, target_window: int) -> None:
         if not isinstance(snippet, Snippet):

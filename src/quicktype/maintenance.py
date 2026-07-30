@@ -37,7 +37,11 @@ def create_manual_backup(storage: Storage) -> Path:
     destination = storage.path.parent / "Backups" / (
         f"QuickType-manual-{datetime.now():%Y%m%d-%H%M%S-%f}.json"
     )
-    export_backup(destination, storage.list_snippets())
+    export_backup(
+        destination,
+        storage.list_snippets(),
+        library_state=storage.export_library_state(),
+    )
     return destination
 
 

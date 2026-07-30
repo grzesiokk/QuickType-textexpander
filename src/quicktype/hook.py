@@ -6,7 +6,7 @@ import queue
 import threading
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Mapping
 
 from .constants import INJECTED_EVENT_MARKER
 from .hotkeys import (
@@ -19,7 +19,7 @@ from .hotkeys import (
 )
 from .matcher import ExpansionAction, SnippetMatcher
 from .models import Snippet, snippet_applies_to_process
-from .template_engine import render_template
+from .template_engine import TOKEN_RE, render_template
 from .windows_platform import PasswordFieldDetector, process_name_from_window, read_clipboard_text
 
 WH_KEYBOARD_LL = 13
@@ -210,6 +210,7 @@ class ExpansionTask:
     action: ExpansionAction
     foreground_window: int
     require_active: bool = True
+    values: tuple[tuple[str, str], ...] = ()
 
 
 class KeyboardHookEngine:
@@ -221,6 +222,7 @@ class KeyboardHookEngine:
         on_error: Callable[[str], None] | None = None,
         on_quick_access: Callable[[int], None] | None = None,
         on_clipboard_capture: Callable[[], None] | None = None,
+        on_form_request: Callable[[ExpansionAction, int], None] | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
         excluded_processes: set[str] | None = None,
@@ -231,6 +233,7 @@ class KeyboardHookEngine:
         self.on_error = on_error
         self.on_quick_access = on_quick_access
         self.on_clipboard_capture = on_clipboard_capture
+        self.on_form_request = on_form_request
         self._quick_access_hotkey = normalize_quick_access_hotkey(
             quick_access_hotkey
         )
@@ -465,7 +468,14 @@ class KeyboardHookEngine:
 
         if action is None:
             return int(user32.CallNextHookEx(self._keyboard_hook, code, message, data_pointer))
-        self._tasks.put_nowait(ExpansionTask(action=action, foreground_window=foreground))
+        if self.on_form_request is not None and _template_may_require_form(
+            action.snippet.expansion
+        ):
+            self.on_form_request(action, foreground)
+        else:
+            self._tasks.put_nowait(
+                ExpansionTask(action=action, foreground_window=foreground)
+            )
         self._suppressed_keyups.add(virtual_key)
         return 1
 
@@ -504,7 +514,12 @@ class KeyboardHookEngine:
         rendered = render_template(
             task.action.snippet.expansion,
             clipboard_provider=read_clipboard_text,
+            values=dict(task.values),
+            match_groups=dict(task.action.match_groups),
+            snippet_provider=self._snippet_provider(task.foreground_window),
         )
+        if rendered.issues:
+            raise ValueError(rendered.issues[0].message)
         inputs: list[INPUT] = []
         for _ in range(task.action.delete_count):
             inputs.extend(_virtual_key_inputs(VK_BACK))
@@ -516,7 +531,10 @@ class KeyboardHookEngine:
         suffix_distance = len(task.action.success_suffix_text)
         if task.action.success_suffix_vk is not None:
             suffix_distance += 1
-        for _ in range(rendered.cursor_from_end + (suffix_distance if rendered.cursor_from_end else 0)):
+        for _ in range(
+            rendered.cursor_from_end
+            + (suffix_distance if rendered.cursor_present else 0)
+        ):
             inputs.extend(_virtual_key_inputs(VK_LEFT))
 
         if inputs and not _send_inputs(inputs):
@@ -602,6 +620,11 @@ class KeyboardHookEngine:
         if not snippet_applies_to_process(snippet, process_name):
             return False
         action = ExpansionAction(snippet=snippet, delete_count=0)
+        if self.on_form_request is not None and _template_may_require_form(
+            snippet.expansion
+        ):
+            self.on_form_request(action, foreground_window)
+            return True
         self._tasks.put_nowait(
             ExpansionTask(
                 action=action,
@@ -610,6 +633,46 @@ class KeyboardHookEngine:
             )
         )
         return True
+
+    def expand_action(
+        self,
+        action: ExpansionAction,
+        foreground_window: int,
+        *,
+        values: Mapping[str, str] | None = None,
+        require_active: bool = True,
+    ) -> None:
+        self._tasks.put_nowait(
+            ExpansionTask(
+                action=action,
+                foreground_window=foreground_window,
+                require_active=require_active,
+                values=tuple((values or {}).items()),
+            )
+        )
+
+    def cancel_action(self, action: ExpansionAction) -> None:
+        self._restore_suppressed_input(action)
+
+    def available_snippet_provider(
+        self,
+        foreground_window: int,
+    ) -> Callable[[str], str | None]:
+        return self._snippet_provider(foreground_window)
+
+    def _snippet_provider(
+        self,
+        foreground_window: int,
+    ) -> Callable[[str], str | None]:
+        process_name = process_name_from_window(foreground_window).casefold()
+        with self._active_lock:
+            available = {
+                snippet.abbreviation: snippet.expansion
+                for snippet in self._snippets
+                if snippet.enabled
+                and snippet_applies_to_process(snippet, process_name)
+            }
+        return available.get
 
     def _virtual_key_to_character(self, virtual_key: int, scan_code: int) -> str:
         keyboard_state = (ctypes.c_ubyte * 256)()
@@ -681,3 +744,12 @@ def _send_inputs(inputs: list[INPUT]) -> bool:
         if sent != len(batch):
             return False
     return True
+
+
+def _template_may_require_form(template: str) -> bool:
+    return any(
+        match.group(1).strip().startswith(
+            ("input:", "choice:", "check:", "snippet:")
+        )
+        for match in TOKEN_RE.finditer(template)
+    )
