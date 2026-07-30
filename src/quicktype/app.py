@@ -14,6 +14,7 @@ from .auto_backup import (
     AutomaticBackupManager,
     normalize_backup_retention,
 )
+from .builtin_libraries import BuiltinCatalog
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
 from .hook import KeyboardHookEngine
 from .hotkeys import (
@@ -37,6 +38,7 @@ from .ui import (
     normalize_theme,
 )
 from .windows_platform import (
+    current_foreground_window,
     is_autostart_enabled,
     repair_autostart_if_enabled,
     restore_foreground_window,
@@ -77,8 +79,9 @@ class QuickTypeController:
         )
 
         self.signals = EngineSignals()
+        self.catalog = BuiltinCatalog(self.storage)
         self.engine = KeyboardHookEngine(
-            self.storage.list_snippets(),
+            self.storage.list_snippets() + self.catalog.runtime_snippets(),
             on_expansion=self.signals.expanded.emit,
             on_error=self.signals.error.emit,
             on_quick_access=self.signals.quick_access.emit,
@@ -91,6 +94,7 @@ class QuickTypeController:
         self.window = MainWindow(
             self.storage,
             self.translator,
+            catalog=self.catalog,
             engine_active=active,
             autostart=autostart,
             automatic_backups=automatic_backups,
@@ -103,6 +107,7 @@ class QuickTypeController:
         self.quick_access = QuickAccessDialog(
             self.storage,
             self.translator,
+            self.catalog,
             quick_access_hotkey=quick_access_hotkey,
         )
         self.tray = TrayController(
@@ -138,6 +143,8 @@ class QuickTypeController:
             self.set_clipboard_capture_hotkey
         )
         self.window.snippets_changed.connect(self.refresh_snippets)
+        self.window.builtin_libraries_changed.connect(self.refresh_snippets)
+        self.window.quick_search_requested.connect(self.open_quick_search)
         self.window.quit_requested.connect(self.quit)
         self.signals.expanded.connect(self._on_expanded)
         self.signals.error.connect(self._on_engine_error)
@@ -192,6 +199,15 @@ class QuickTypeController:
         self.window.show_and_activate()
         self.window.new_snippet_from_clipboard()
 
+    def open_quick_search(self) -> None:
+        self.window.hide()
+        QTimer.singleShot(180, self._open_quick_search_for_foreground)
+
+    def _open_quick_search_for_foreground(self) -> None:
+        target_window = current_foreground_window()
+        if target_window:
+            self.quick_access.show_for_window(target_window)
+
     def set_active(self, active: bool) -> None:
         self.engine.set_active(active)
         self.storage.set_setting("engine_active", "1" if active else "0")
@@ -213,7 +229,7 @@ class QuickTypeController:
 
     def refresh_snippets(self) -> None:
         snippets = self.storage.list_snippets()
-        self.engine.replace_snippets(snippets)
+        self.engine.replace_snippets(snippets + self.catalog.runtime_snippets())
         if self.window.automatic_backups:
             self._create_automatic_backup(snippets)
 
@@ -278,7 +294,14 @@ class QuickTypeController:
     def _on_expanded(self, snippet: object) -> None:
         abbreviation = getattr(snippet, "abbreviation", "")
         snippet_id = getattr(snippet, "id", None)
-        if isinstance(snippet_id, int):
+        source_library = getattr(snippet, "source_library", "")
+        source_item_id = getattr(snippet, "source_item_id", "")
+        if source_library and source_item_id:
+            self.storage.record_builtin_expansion(
+                str(source_library),
+                str(source_item_id),
+            )
+        elif isinstance(snippet_id, int):
             updated = self.storage.record_expansion(snippet_id)
             if updated is not None:
                 self.window.refresh_usage(updated)

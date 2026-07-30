@@ -538,6 +538,20 @@ def _write_catalog(
     source: str,
     license_name: str,
 ) -> None:
+    for item in items:
+        keywords = item.get("keywords", [])
+        searchable = " ".join(
+            str(value)
+            for value in (
+                item.get("title", ""),
+                item.get("slug", ""),
+                item.get("expansion", ""),
+                *(keywords if isinstance(keywords, list) else []),
+            )
+        )
+        item["search"] = " ".join(
+            _strip_diacritics(searchable).casefold().split()
+        )
     document = {
         "format": "quicktype-builtin-library",
         "version": 1,

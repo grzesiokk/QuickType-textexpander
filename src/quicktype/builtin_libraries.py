@@ -20,6 +20,12 @@ class BuiltinLibraryId(StrEnum):
     CALCULATOR = "calculator"
 
 
+class BuiltinLibrarySettingsError(ValueError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 @dataclass(frozen=True, slots=True)
 class BuiltinLibraryDefinition:
     library_id: BuiltinLibraryId
@@ -49,6 +55,7 @@ class BuiltinItem:
     slug: str
     keywords: tuple[str, ...]
     profile: str
+    search_text: str = ""
 
 
 LIBRARY_DEFINITIONS = (
@@ -151,9 +158,13 @@ class BuiltinCatalog:
     ) -> None:
         definition = DEFINITIONS_BY_ID[library_id]
         if settings.profile not in definition.profiles:
-            raise ValueError("Unsupported built-in library profile.")
+            raise BuiltinLibrarySettingsError("profile")
         prefix = settings.prefix if definition.prefix_editable else definition.default_prefix
-        self._validate_prefix(library_id, prefix)
+        self._validate_prefix(
+            library_id,
+            prefix,
+            enabled=settings.enabled,
+        )
         self.storage.set_builtin_library_settings(
             library_id.value,
             enabled=settings.enabled,
@@ -253,6 +264,22 @@ class BuiltinCatalog:
             + definition.suffix
         )
 
+    def snippet_for_item(
+        self,
+        item: BuiltinItem,
+        *,
+        abbreviation: str | None = None,
+    ) -> Snippet:
+        return _item_to_snippet(
+            item,
+            abbreviation=abbreviation or self.trigger_for_item(item),
+            mode=(
+                TriggerMode.DELIMITER
+                if item.library_id == BuiltinLibraryId.AUTOCORRECT_PL
+                else TriggerMode.IMMEDIATE
+            ),
+        )
+
     def copy_as_snippet(self, item: BuiltinItem) -> Snippet:
         trigger = self.trigger_for_item(item)
         if len(trigger) > 64:
@@ -292,18 +319,22 @@ class BuiltinCatalog:
         self,
         library_id: BuiltinLibraryId,
         prefix: str,
+        *,
+        enabled: bool,
     ) -> None:
         definition = DEFINITIONS_BY_ID[library_id]
         if definition.prefix_editable and not prefix:
-            raise ValueError("A direct-trigger library prefix cannot be empty.")
+            raise BuiltinLibrarySettingsError("prefix_required")
         if (
             len(prefix) > 32
             or any(character.isspace() for character in prefix)
             or any(ord(character) < 32 or ord(character) == 127 for character in prefix)
         ):
-            raise ValueError("Library prefix must contain up to 32 non-whitespace characters.")
+            raise BuiltinLibrarySettingsError("prefix_invalid")
         for other in LIBRARY_DEFINITIONS:
             if (
+                not enabled
+                or
                 other.library_id == library_id
                 or not other.prefix_editable
             ):
@@ -314,7 +345,7 @@ class BuiltinCatalog:
                 and prefix
                 and other_settings.prefix == prefix
             ):
-                raise ValueError("Another enabled built-in library already uses this prefix.")
+                raise BuiltinLibrarySettingsError("prefix_conflict")
 
 
 def _load_catalog(
@@ -343,6 +374,7 @@ def _load_catalog(
         slug = raw.get("slug")
         keywords = raw.get("keywords")
         profile = raw.get("profile")
+        search_text = raw.get("search", "")
         if (
             not all(
                 isinstance(value, str) and value
@@ -350,6 +382,7 @@ def _load_catalog(
             )
             or not isinstance(keywords, list)
             or not all(isinstance(value, str) for value in keywords)
+            or not isinstance(search_text, str)
             or item_id in seen_ids
             or slug in seen_slugs
         ):
@@ -365,6 +398,7 @@ def _load_catalog(
                 slug=slug,
                 keywords=tuple(dict.fromkeys(keywords)),
                 profile=profile,
+                search_text=search_text,
             )
         )
     return tuple(items)
@@ -410,6 +444,7 @@ def _autocorrection_snippets(item: BuiltinItem) -> list[Snippet]:
                 slug=item.slug,
                 keywords=item.keywords,
                 profile=item.profile,
+                search_text=item.search_text,
             ),
             abbreviation=abbreviation,
             mode=TriggerMode.DELIMITER,

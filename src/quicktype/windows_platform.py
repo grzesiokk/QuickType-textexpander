@@ -40,6 +40,8 @@ user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.ShowWindow.restype = wintypes.BOOL
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.SetForegroundWindow.restype = wintypes.BOOL
+user32.GetForegroundWindow.argtypes = []
+user32.GetForegroundWindow.restype = wintypes.HWND
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.QueryFullProcessImageNameW.argtypes = [
@@ -130,6 +132,10 @@ def restore_foreground_window(window: int) -> bool:
     if user32.IsIconic(window):
         user32.ShowWindow(window, SW_RESTORE)
     return bool(user32.SetForegroundWindow(window))
+
+
+def current_foreground_window() -> int:
+    return int(user32.GetForegroundWindow() or 0)
 
 
 def process_name_from_window(window: int) -> str:

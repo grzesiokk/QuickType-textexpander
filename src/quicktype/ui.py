@@ -8,7 +8,9 @@ from pathlib import Path
 
 import regex
 from PySide6.QtCore import (
+    QAbstractTableModel,
     QByteArray,
+    QModelIndex,
     QObject,
     QSignalBlocker,
     Qt,
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QSystemTrayIcon,
+    QTableView,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -64,6 +67,15 @@ from .backup_catalog import (
     BackupKind,
     delete_backup_file,
     list_backup_entries,
+)
+from .builtin_libraries import (
+    DEFINITIONS_BY_ID,
+    LIBRARY_DEFINITIONS,
+    BuiltinCatalog,
+    BuiltinItem,
+    BuiltinLibraryId,
+    BuiltinLibrarySettings,
+    BuiltinLibrarySettingsError,
 )
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .diagnostics import collect_diagnostic_report
@@ -94,7 +106,6 @@ from .models import (
     next_copy_abbreviation,
     normalize_applications,
     normalize_search_terms,
-    snippet_applies_to_process,
     validate_category,
     validate_snippet_trigger,
 )
@@ -105,6 +116,7 @@ from .recovery import (
     analyze_restore,
     restore_backup,
 )
+from .search import SearchEntry, SearchIndex, normalize_search_text
 from .storage import DuplicateAbbreviationError, Storage
 from .template_engine import (
     FormField,
@@ -495,6 +507,66 @@ class SettingsDialog(QDialog):
         return normalize_theme(self.theme_combo.currentData())
 
 
+class QuickAccessModel(QAbstractTableModel):
+    def __init__(
+        self,
+        translator: Translator,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.t = translator
+        self.entries: list[SearchEntry] = []
+
+    def set_entries(self, entries: list[SearchEntry]) -> None:
+        self.beginResetModel()
+        self.entries = entries
+        self.endResetModel()
+
+    def rowCount(self, parent: QModelIndex | None = None) -> int:
+        return 0 if parent is not None and parent.isValid() else len(self.entries)
+
+    def columnCount(self, parent: QModelIndex | None = None) -> int:
+        return 0 if parent is not None and parent.isValid() else 4
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
+        if not index.isValid() or not 0 <= index.row() < len(self.entries):
+            return None
+        entry = self.entries[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            values = (
+                ("★ " if entry.favorite else "") + entry.title,
+                self.t(f"search_source_{entry.source}"),
+                entry.abbreviation,
+                entry.preview,
+            )
+            return values[index.column()]
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return entry.preview
+        if role == ID_ROLE:
+            return entry.key
+        return None
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
+        if orientation != Qt.Orientation.Horizontal or role != Qt.ItemDataRole.DisplayRole:
+            return None
+        headers = (
+            self.t("name_column"),
+            self.t("source_column"),
+            self.t("shortcut_column"),
+            self.t("preview"),
+        )
+        return headers[section] if 0 <= section < len(headers) else None
+
+
 class QuickAccessDialog(QDialog):
     snippet_chosen = Signal(object, int)
 
@@ -502,13 +574,16 @@ class QuickAccessDialog(QDialog):
         self,
         storage: Storage,
         translator: Translator,
+        catalog: BuiltinCatalog | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.storage = storage
         self.t = translator
-        self.snippets: list[Snippet] = []
+        self.catalog = catalog
+        self.index = SearchIndex(())
+        self.results: list[SearchEntry] = []
         self._target_window = 0
         self.quick_access_hotkey = normalize_quick_access_hotkey(
             quick_access_hotkey
@@ -517,7 +592,7 @@ class QuickAccessDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.Tool, True)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setModal(False)
-        self.resize(720, 430)
+        self.resize(860, 480)
 
         layout = QVBoxLayout(self)
         self.search_edit = QLineEdit()
@@ -526,16 +601,18 @@ class QuickAccessDialog(QDialog):
         self.search_edit.returnPressed.connect(self.choose_current)
         layout.addWidget(self.search_edit)
 
-        self.table = QTableWidget(0, 4)
+        self.table = QTableView()
+        self.model = QuickAccessModel(self.t, self.table)
+        self.table.setModel(self.model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 38)
-        self.table.setColumnWidth(1, 150)
-        self.table.setColumnWidth(2, 140)
-        self.table.itemDoubleClicked.connect(lambda _item: self.choose_current())
+        self.table.setColumnWidth(0, 210)
+        self.table.setColumnWidth(1, 130)
+        self.table.setColumnWidth(2, 175)
+        self.table.doubleClicked.connect(lambda _index: self.choose_current())
         layout.addWidget(self.table, 1)
 
         self.hint_label = QLabel()
@@ -546,20 +623,17 @@ class QuickAccessDialog(QDialog):
     def retranslate(self) -> None:
         self.setWindowTitle(self.t("quick_access"))
         self.search_edit.setPlaceholderText(self.t("quick_access_search"))
-        self.table.setHorizontalHeaderLabels(
-            [
-                self.t("favorite_column"),
-                self.t("shortcut_column"),
-                self.t("category_column"),
-                self.t("expansion"),
-            ]
+        self.model.headerDataChanged.emit(
+            Qt.Orientation.Horizontal,
+            0,
+            self.model.columnCount() - 1,
         )
         hotkey_label = self.t(
             HOTKEY_TRANSLATION_KEYS[self.quick_access_hotkey]
         )
         self.hint_label.setText(self.t("quick_access_hint", hotkey=hotkey_label))
-        if self.snippets:
-            self._populate_table()
+        if self.results:
+            self.apply_filter(self.search_edit.text())
 
     def set_hotkey(self, hotkey: str) -> None:
         self.quick_access_hotkey = normalize_quick_access_hotkey(hotkey)
@@ -567,89 +641,278 @@ class QuickAccessDialog(QDialog):
 
     def show_for_window(self, target_window: int) -> None:
         self._target_window = target_window
-        process_name = process_name_from_window(target_window)
-        self.snippets = sorted(
-            (
-                snippet
-                for snippet in self.storage.list_snippets()
-                if snippet.enabled
-                and snippet_applies_to_process(snippet, process_name)
-            ),
-            key=lambda snippet: (
-                not snippet.favorite,
-                -snippet.usage_count,
-                snippet.abbreviation.casefold(),
-            ),
+        self.index = SearchIndex.build(
+            self.storage.list_snippets(),
+            self.catalog,
+            process_name=process_name_from_window(target_window),
         )
-        self._populate_table()
         self.search_edit.clear()
+        self.apply_filter("")
         self.show()
         self.raise_()
         self.activateWindow()
         self.search_edit.setFocus()
 
-    def _populate_table(self) -> None:
-        self.table.setRowCount(0)
-        for snippet in self.snippets:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            favorite = QTableWidgetItem("★" if snippet.favorite else "")
-            favorite.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            favorite.setData(ID_ROLE, snippet.id)
-            abbreviation = QTableWidgetItem(snippet.abbreviation)
-            abbreviation.setData(ID_ROLE, snippet.id)
-            category = QTableWidgetItem(
-                snippet.category if snippet.category else self.t("uncategorized")
-            )
-            category.setData(ID_ROLE, snippet.id)
-            preview = render_template(snippet.expansion, clipboard_text="").text
-            preview_item = QTableWidgetItem(preview.replace("\r", "").replace("\n", " ↵ "))
-            preview_item.setData(ID_ROLE, snippet.id)
-            self.table.setItem(row, 0, favorite)
-            self.table.setItem(row, 1, abbreviation)
-            self.table.setItem(row, 2, category)
-            self.table.setItem(row, 3, preview_item)
-        self._select_first_visible()
-
     def apply_filter(self, text: str) -> None:
-        needle = text.strip().casefold()
-        for row in range(self.table.rowCount()):
-            snippet_id = self.table.item(row, 0).data(ID_ROLE)
-            snippet = next((item for item in self.snippets if item.id == snippet_id), None)
-            visible = (
-                snippet is not None
-                and (
-                    not needle
-                    or needle in snippet.abbreviation.casefold()
-                    or needle in snippet.category.casefold()
-                    or needle in snippet.expansion.casefold()
-                    or any(
-                        needle in application.casefold()
-                        for application in snippet.applications
-                    )
-                )
-            )
-            self.table.setRowHidden(row, not visible)
-        self._select_first_visible()
-
-    def _select_first_visible(self) -> None:
-        for row in range(self.table.rowCount()):
-            if not self.table.isRowHidden(row):
-                self.table.selectRow(row)
-                return
-        self.table.clearSelection()
+        self.results = self.index.search(text)
+        self.model.set_entries(self.results)
+        if self.results:
+            self.table.selectRow(0)
+        else:
+            self.table.clearSelection()
 
     def choose_current(self) -> None:
-        selected = self.table.selectedItems()
-        if not selected:
-            return
-        snippet_id = selected[0].data(ID_ROLE)
-        snippet = next((item for item in self.snippets if item.id == snippet_id), None)
-        if snippet is None:
+        current = self.table.currentIndex()
+        if not current.isValid() or not 0 <= current.row() < len(self.results):
             return
         target_window = self._target_window
+        snippet = self.results[current.row()].snippet
         self.hide()
         self.snippet_chosen.emit(snippet, target_window)
+
+
+class BuiltinLibraryManagerDialog(QDialog):
+    settings_changed = Signal()
+    snippets_changed = Signal()
+
+    def __init__(
+        self,
+        catalog: BuiltinCatalog,
+        translator: Translator,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.catalog = catalog
+        self.storage = catalog.storage
+        self.t = translator
+        self._items: list[BuiltinItem] = []
+        self.setModal(True)
+        self.resize(960, 650)
+
+        layout = QVBoxLayout(self)
+        library_row = QHBoxLayout()
+        self.library_combo = QComboBox()
+        for definition in LIBRARY_DEFINITIONS:
+            self.library_combo.addItem(
+                self.t(definition.name_key),
+                definition.library_id.value,
+            )
+        self.library_combo.currentIndexChanged.connect(self._load_library)
+        library_row.addWidget(self.library_combo, 1)
+        self.item_count_label = QLabel()
+        self.item_count_label.setProperty("kind", "muted")
+        library_row.addWidget(self.item_count_label)
+        layout.addLayout(library_row)
+
+        self.description_label = QLabel()
+        self.description_label.setWordWrap(True)
+        self.description_label.setProperty("kind", "muted")
+        layout.addWidget(self.description_label)
+
+        settings_row = QHBoxLayout()
+        self.enabled_checkbox = QCheckBox(self.t("library_enabled"))
+        settings_row.addWidget(self.enabled_checkbox)
+        settings_row.addWidget(QLabel(self.t("library_profile")))
+        self.profile_combo = QComboBox()
+        settings_row.addWidget(self.profile_combo)
+        settings_row.addWidget(QLabel(self.t("library_prefix")))
+        self.prefix_edit = QLineEdit()
+        self.prefix_edit.setMaximumWidth(180)
+        settings_row.addWidget(self.prefix_edit)
+        self.save_settings_button = QPushButton(self.t("library_save_settings"))
+        self.save_settings_button.clicked.connect(self.save_settings)
+        settings_row.addWidget(self.save_settings_button)
+        settings_row.addStretch(1)
+        layout.addLayout(settings_row)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setPlaceholderText(self.t("library_search"))
+        self.search_edit.textChanged.connect(self._populate_items)
+        layout.addWidget(self.search_edit)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        self.table.setHorizontalHeaderLabels(
+            (
+                self.t("active_column"),
+                self.t("name_column"),
+                self.t("shortcut_column"),
+                self.t("preview"),
+            )
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            3,
+            QHeaderView.ResizeMode.Stretch,
+        )
+        self.table.setColumnWidth(0, 55)
+        self.table.setColumnWidth(1, 260)
+        self.table.setColumnWidth(2, 220)
+        layout.addWidget(self.table, 1)
+
+        actions = QHBoxLayout()
+        self.disable_button = QPushButton(self.t("library_disable_item"))
+        self.disable_button.clicked.connect(
+            lambda: self._set_selected_item_enabled(False)
+        )
+        actions.addWidget(self.disable_button)
+        self.enable_button = QPushButton(self.t("library_enable_item"))
+        self.enable_button.clicked.connect(
+            lambda: self._set_selected_item_enabled(True)
+        )
+        actions.addWidget(self.enable_button)
+        self.copy_button = QPushButton(self.t("library_copy_item"))
+        self.copy_button.clicked.connect(self.copy_selected_item)
+        actions.addWidget(self.copy_button)
+        actions.addStretch(1)
+        close_button = QPushButton(self.t("close"))
+        close_button.clicked.connect(self.accept)
+        actions.addWidget(close_button)
+        layout.addLayout(actions)
+
+        self.setWindowTitle(self.t("libraries"))
+        self._load_library()
+
+    @property
+    def current_library_id(self) -> BuiltinLibraryId:
+        return BuiltinLibraryId(str(self.library_combo.currentData()))
+
+    def _load_library(self) -> None:
+        library_id = self.current_library_id
+        definition = DEFINITIONS_BY_ID[library_id]
+        settings = self.catalog.settings(library_id)
+        self.description_label.setText(self.t(definition.description_key))
+        self.item_count_label.setText(
+            self.t(
+                "library_item_count",
+                count=self.catalog.item_count(library_id),
+            )
+        )
+        with QSignalBlocker(self.profile_combo):
+            self.profile_combo.clear()
+            for profile in definition.profiles:
+                self.profile_combo.addItem(
+                    self.t(f"library_profile_{profile}"),
+                    profile,
+                )
+            self.profile_combo.setCurrentIndex(
+                max(0, self.profile_combo.findData(settings.profile))
+            )
+        with QSignalBlocker(self.enabled_checkbox):
+            self.enabled_checkbox.setChecked(settings.enabled)
+        with QSignalBlocker(self.prefix_edit):
+            self.prefix_edit.setText(settings.prefix)
+        self.prefix_edit.setEnabled(definition.prefix_editable)
+        has_items = library_id != BuiltinLibraryId.CALCULATOR
+        self.search_edit.setEnabled(has_items)
+        self.table.setEnabled(has_items)
+        self.disable_button.setEnabled(has_items)
+        self.enable_button.setEnabled(has_items)
+        self.copy_button.setEnabled(has_items)
+        self._populate_items(self.search_edit.text())
+
+    def save_settings(self) -> None:
+        library_id = self.current_library_id
+        try:
+            self.catalog.set_settings(
+                library_id,
+                BuiltinLibrarySettings(
+                    enabled=self.enabled_checkbox.isChecked(),
+                    profile=str(self.profile_combo.currentData()),
+                    prefix=self.prefix_edit.text(),
+                ),
+            )
+        except ValueError as error:
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t(
+                    "library_settings_error",
+                    error=self.t(
+                        f"library_error_{error.code}"
+                        if isinstance(error, BuiltinLibrarySettingsError)
+                        else "library_error_unknown"
+                    ),
+                ),
+            )
+            return
+        self.settings_changed.emit()
+        self._populate_items(self.search_edit.text())
+
+    def _populate_items(self, text: str) -> None:
+        library_id = self.current_library_id
+        if library_id == BuiltinLibraryId.CALCULATOR:
+            self._items = []
+            self.table.setRowCount(0)
+            return
+        terms = tuple(normalize_search_text(text).split())
+        disabled = self.storage.list_disabled_builtin_items(library_id.value)
+        matches: list[BuiltinItem] = []
+        for item in self.catalog.items(library_id):
+            haystack = item.search_text or normalize_search_text(
+                " ".join((item.title, item.slug, item.expansion, *item.keywords))
+            )
+            if terms and not all(term in haystack for term in terms):
+                continue
+            matches.append(item)
+            if len(matches) >= 300:
+                break
+        self._items = matches
+        self.table.setRowCount(len(matches))
+        for row, item in enumerate(matches):
+            enabled = QTableWidgetItem("●" if item.item_id not in disabled else "○")
+            enabled.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            enabled.setData(ID_ROLE, item.item_id)
+            self.table.setItem(row, 0, enabled)
+            self.table.setItem(row, 1, QTableWidgetItem(item.title))
+            self.table.setItem(
+                row,
+                2,
+                QTableWidgetItem(self.catalog.trigger_for_item(item)),
+            )
+            self.table.setItem(row, 3, QTableWidgetItem(item.expansion))
+        if matches:
+            self.table.selectRow(0)
+
+    def _selected_item(self) -> BuiltinItem | None:
+        row = self.table.currentRow()
+        return self._items[row] if 0 <= row < len(self._items) else None
+
+    def _set_selected_item_enabled(self, enabled: bool) -> None:
+        item = self._selected_item()
+        if item is None:
+            return
+        self.catalog.set_item_enabled(item, enabled=enabled)
+        self.settings_changed.emit()
+        self._populate_items(self.search_edit.text())
+
+    def copy_selected_item(self) -> None:
+        item = self._selected_item()
+        if item is None:
+            return
+        snippet = self.catalog.copy_as_snippet(item)
+        existing = {
+            entry.abbreviation
+            for entry in self.storage.list_snippets()
+        }
+        if snippet.abbreviation in existing:
+            snippet = replace(
+                snippet,
+                abbreviation=next_copy_abbreviation(
+                    snippet.abbreviation,
+                    existing,
+                ),
+            )
+        saved = self.storage.save_snippet(snippet)
+        self.snippets_changed.emit()
+        QMessageBox.information(
+            self,
+            self.t("libraries"),
+            self.t("library_item_copied", abbr=saved.abbreviation),
+        )
 
 
 class BackupRestoreDialog(QDialog):
@@ -1650,6 +1913,8 @@ class MainWindow(QMainWindow):
     quick_access_hotkey_change_requested = Signal(str)
     clipboard_capture_hotkey_change_requested = Signal(str)
     snippets_changed = Signal()
+    builtin_libraries_changed = Signal()
+    quick_search_requested = Signal()
     quit_requested = Signal()
 
     def __init__(
@@ -1657,6 +1922,7 @@ class MainWindow(QMainWindow):
         storage: Storage,
         translator: Translator,
         *,
+        catalog: BuiltinCatalog | None = None,
         engine_active: bool,
         autostart: bool,
         automatic_backups: bool = True,
@@ -1669,6 +1935,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.storage = storage
         self.t = translator
+        self.catalog = catalog or BuiltinCatalog(storage)
         self.engine_active = engine_active
         self.autostart = autostart
         self.automatic_backups = automatic_backups
@@ -1738,6 +2005,10 @@ class MainWindow(QMainWindow):
         self.delete_action.triggered.connect(self.delete_selected)
         toolbar.addAction(self.delete_action)
 
+        self.quick_search_action = QAction(self)
+        self.quick_search_action.triggered.connect(self.quick_search_requested.emit)
+        toolbar.addAction(self.quick_search_action)
+
         self.bulk_enable_action = QAction(self)
         self.bulk_enable_action.setShortcut(QKeySequence("Ctrl+Alt+E"))
         self.bulk_enable_action.triggered.connect(
@@ -1785,11 +2056,9 @@ class MainWindow(QMainWindow):
         self.bulk_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
-        toolbar.addWidget(self.bulk_button)
 
         self.import_action = QAction(self)
         self.import_action.triggered.connect(self.import_snippets)
-        toolbar.addAction(self.import_action)
 
         self.export_action = QAction(self)
         self.export_action.triggered.connect(self.export_snippets)
@@ -1809,23 +2078,18 @@ class MainWindow(QMainWindow):
         self.export_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
-        toolbar.addWidget(self.export_button)
 
         self.restore_action = QAction(self)
         self.restore_action.triggered.connect(self.restore_automatic_backup)
-        toolbar.addAction(self.restore_action)
 
         self.data_action = QAction(self)
         self.data_action.triggered.connect(self.open_data_maintenance)
-        toolbar.addAction(self.data_action)
 
         self.categories_action = QAction(self)
         self.categories_action.triggered.connect(self.open_category_manager)
-        toolbar.addAction(self.categories_action)
 
         self.statistics_action = QAction(self)
         self.statistics_action.triggered.connect(self.open_statistics)
-        toolbar.addAction(self.statistics_action)
         toolbar.addSeparator()
 
         self.active_action = QAction(self)
@@ -1841,6 +2105,31 @@ class MainWindow(QMainWindow):
         self.settings_action = QAction(self)
         self.settings_action.triggered.connect(self.open_settings)
         toolbar.addAction(self.settings_action)
+
+        self.libraries_action = QAction(self)
+        self.libraries_action.triggered.connect(self.open_builtin_libraries)
+        self.library_toggle_actions: dict[BuiltinLibraryId, QAction] = {}
+        for definition in LIBRARY_DEFINITIONS:
+            action = QAction(self)
+            action.setCheckable(True)
+            action.setChecked(
+                self.catalog.settings(definition.library_id).enabled
+            )
+            action.toggled.connect(
+                lambda enabled, library_id=definition.library_id: (
+                    self._set_library_enabled(library_id, enabled)
+                )
+            )
+            self.library_toggle_actions[definition.library_id] = action
+
+        self.quit_action = QAction(self)
+        self.quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        self.quit_action.triggered.connect(self.quit_requested.emit)
+        self.licenses_action = QAction(self)
+        self.licenses_action.triggered.connect(self.open_data_licenses)
+        self.about_action = QAction(self)
+        self.about_action.triggered.connect(self.show_about)
+        self._build_menu_bar()
 
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
@@ -1877,6 +2166,45 @@ class MainWindow(QMainWindow):
         QWidget.setTabOrder(self.priority_spin, self.enabled_checkbox)
         QWidget.setTabOrder(self.enabled_checkbox, self.favorite_checkbox)
         QWidget.setTabOrder(self.favorite_checkbox, self.expansion_edit)
+
+    def _build_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+        self.file_menu = menu_bar.addMenu("")
+        self.file_menu.addAction(self.import_action)
+        self.file_menu.addAction(self.export_action)
+        self.file_menu.addAction(self.export_filtered_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.restore_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.quit_action)
+
+        self.snippets_menu = menu_bar.addMenu("")
+        self.snippets_menu.addAction(self.new_action)
+        self.snippets_menu.addAction(self.new_from_clipboard_action)
+        self.snippets_menu.addAction(self.duplicate_action)
+        self.snippets_menu.addAction(self.delete_action)
+        self.snippets_menu.addSeparator()
+        self.snippets_menu.addMenu(self.bulk_menu)
+        self.snippets_menu.addAction(self.categories_action)
+
+        self.libraries_menu = menu_bar.addMenu("")
+        self.libraries_menu.addAction(self.libraries_action)
+        self.libraries_menu.addSeparator()
+        for definition in LIBRARY_DEFINITIONS:
+            self.libraries_menu.addAction(
+                self.library_toggle_actions[definition.library_id]
+            )
+
+        self.tools_menu = menu_bar.addMenu("")
+        self.tools_menu.addAction(self.quick_search_action)
+        self.tools_menu.addAction(self.statistics_action)
+        self.tools_menu.addAction(self.data_action)
+
+        menu_bar.addAction(self.settings_action)
+
+        self.help_menu = menu_bar.addMenu("")
+        self.help_menu.addAction(self.licenses_action)
+        self.help_menu.addAction(self.about_action)
 
     def _build_list_panel(self) -> QWidget:
         panel = QWidget()
@@ -2072,6 +2400,7 @@ class MainWindow(QMainWindow):
         )
         self.duplicate_action.setText(self.t("duplicate"))
         self.delete_action.setText(self.t("delete"))
+        self.quick_search_action.setText(self.t("quick_access"))
         self.bulk_button.setText(self.t("bulk_actions"))
         self.bulk_enable_action.setText(self.t("bulk_enable"))
         self.bulk_disable_action.setText(self.t("bulk_disable"))
@@ -2089,6 +2418,19 @@ class MainWindow(QMainWindow):
         self.statistics_action.setText(self.t("statistics"))
         self.active_action.setText(self.t("engine_active"))
         self.settings_action.setText(self.t("settings"))
+        self.libraries_action.setText(self.t("library_manager"))
+        self.quit_action.setText(self.t("quit"))
+        self.licenses_action.setText(self.t("data_licenses"))
+        self.about_action.setText(self.t("about"))
+        self.file_menu.setTitle(self.t("menu_file"))
+        self.snippets_menu.setTitle(self.t("menu_snippets"))
+        self.libraries_menu.setTitle(self.t("libraries"))
+        self.tools_menu.setTitle(self.t("menu_tools"))
+        self.help_menu.setTitle(self.t("menu_help"))
+        for definition in LIBRARY_DEFINITIONS:
+            self.library_toggle_actions[definition.library_id].setText(
+                self.t(definition.name_key)
+            )
         self.search_edit.setPlaceholderText(self.t("search_placeholder"))
         self.search_edit.setToolTip(self.t("search_tooltip"))
         self.search_edit.setAccessibleName(self.t("search_accessible"))
@@ -2956,6 +3298,61 @@ class MainWindow(QMainWindow):
         self.snippets_changed.emit()
         self.status_message.setText(self.t("categories_updated"))
 
+    def open_builtin_libraries(self) -> None:
+        if not self._maybe_resolve_dirty():
+            return
+        dialog = BuiltinLibraryManagerDialog(self.catalog, self.t, self)
+        dialog.settings_changed.connect(self._builtin_settings_changed)
+        dialog.snippets_changed.connect(self._builtin_snippet_copied)
+        dialog.exec()
+
+    def _builtin_settings_changed(self) -> None:
+        for library_id, action in self.library_toggle_actions.items():
+            with QSignalBlocker(action):
+                action.setChecked(self.catalog.settings(library_id).enabled)
+        self.builtin_libraries_changed.emit()
+        self.status_message.setText(self.t("library_settings_saved"))
+
+    def _builtin_snippet_copied(self) -> None:
+        self.reload_snippets()
+        self.snippets_changed.emit()
+
+    def _set_library_enabled(
+        self,
+        library_id: BuiltinLibraryId,
+        enabled: bool,
+    ) -> None:
+        current = self.catalog.settings(library_id)
+        try:
+            self.catalog.set_settings(
+                library_id,
+                BuiltinLibrarySettings(
+                    enabled=enabled,
+                    profile=current.profile,
+                    prefix=current.prefix,
+                ),
+            )
+        except ValueError as error:
+            with QSignalBlocker(self.library_toggle_actions[library_id]):
+                self.library_toggle_actions[library_id].setChecked(
+                    current.enabled
+                )
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t(
+                    "library_settings_error",
+                    error=self.t(
+                        f"library_error_{error.code}"
+                        if isinstance(error, BuiltinLibrarySettingsError)
+                        else "library_error_unknown"
+                    ),
+                ),
+            )
+            return
+        self.builtin_libraries_changed.emit()
+        self.status_message.setText(self.t("library_settings_saved"))
+
     def open_statistics(self) -> None:
         if not self._maybe_resolve_dirty():
             return
@@ -2971,6 +3368,32 @@ class MainWindow(QMainWindow):
         if not self._maybe_resolve_dirty():
             return
         DataMaintenanceDialog(self.storage, self.t, self).exec()
+
+    def open_data_licenses(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.t("data_licenses"))
+        dialog.resize(760, 590)
+        layout = QVBoxLayout(dialog)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        try:
+            text.setPlainText(
+                resource_path("DATA_LICENSES.md").read_text(encoding="utf-8")
+            )
+        except OSError as error:
+            text.setPlainText(str(error))
+        layout.addWidget(text, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def show_about(self) -> None:
+        QMessageBox.about(
+            self,
+            self.t("about"),
+            self.t("about_text", version=APP_VERSION),
+        )
 
     def cancel_edit(self) -> None:
         if self._current_id is not None:
