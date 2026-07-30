@@ -19,7 +19,7 @@ from .models import (
     validate_snippet_trigger,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class DuplicateAbbreviationError(ValueError):
@@ -68,6 +68,29 @@ class Storage:
 
                 CREATE INDEX IF NOT EXISTS idx_snippets_enabled
                     ON snippets(enabled);
+
+                CREATE TABLE IF NOT EXISTS builtin_library_settings (
+                    library_id TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+                    profile TEXT NOT NULL DEFAULT '',
+                    prefix TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS builtin_item_overrides (
+                    library_id TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    disabled INTEGER NOT NULL DEFAULT 1 CHECK(disabled IN (0, 1)),
+                    PRIMARY KEY(library_id, item_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS builtin_usage (
+                    library_id TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    usage_count INTEGER NOT NULL DEFAULT 0,
+                    last_used_at TEXT,
+                    PRIMARY KEY(library_id, item_id)
+                );
                 """
             )
             columns = {
@@ -556,6 +579,270 @@ class Storage:
                 (key, value),
             )
 
+    def get_builtin_library_settings(
+        self,
+        library_id: str,
+    ) -> tuple[bool, str, str] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT enabled, profile, prefix
+                FROM builtin_library_settings
+                WHERE library_id = ?
+                """,
+                (library_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return bool(row["enabled"]), str(row["profile"]), str(row["prefix"])
+
+    def set_builtin_library_settings(
+        self,
+        library_id: str,
+        *,
+        enabled: bool,
+        profile: str,
+        prefix: str,
+    ) -> None:
+        _validate_builtin_identifier(library_id, "library")
+        if len(profile) > 40 or any(character.isspace() for character in profile):
+            raise ValueError("Invalid built-in library profile.")
+        if (
+            len(prefix) > 32
+            or any(character.isspace() for character in prefix)
+            or any(ord(character) < 32 or ord(character) == 127 for character in prefix)
+        ):
+            raise ValueError("Library prefix must have at most 32 non-whitespace characters.")
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO builtin_library_settings(
+                    library_id, enabled, profile, prefix, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(library_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    profile = excluded.profile,
+                    prefix = excluded.prefix,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    library_id,
+                    int(enabled),
+                    profile,
+                    prefix,
+                    datetime.now().isoformat(timespec="seconds"),
+                ),
+            )
+
+    def list_disabled_builtin_items(self, library_id: str) -> set[str]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT item_id
+                FROM builtin_item_overrides
+                WHERE library_id = ? AND disabled = 1
+                """,
+                (library_id,),
+            ).fetchall()
+        return {str(row["item_id"]) for row in rows}
+
+    def set_builtin_item_enabled(
+        self,
+        library_id: str,
+        item_id: str,
+        *,
+        enabled: bool,
+    ) -> None:
+        _validate_builtin_identifier(library_id, "library")
+        _validate_builtin_identifier(item_id, "item")
+        with self._connection() as connection:
+            if enabled:
+                connection.execute(
+                    """
+                    DELETE FROM builtin_item_overrides
+                    WHERE library_id = ? AND item_id = ?
+                    """,
+                    (library_id, item_id),
+                )
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO builtin_item_overrides(library_id, item_id, disabled)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(library_id, item_id) DO UPDATE SET disabled = 1
+                    """,
+                    (library_id, item_id),
+                )
+
+    def record_builtin_expansion(
+        self,
+        library_id: str,
+        item_id: str,
+    ) -> None:
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO builtin_usage(
+                    library_id, item_id, usage_count, last_used_at
+                ) VALUES (?, ?, 1, ?)
+                ON CONFLICT(library_id, item_id) DO UPDATE SET
+                    usage_count = usage_count + 1,
+                    last_used_at = excluded.last_used_at
+                """,
+                (library_id, item_id, timestamp),
+            )
+
+    def list_builtin_usage(
+        self,
+    ) -> dict[tuple[str, str], tuple[int, datetime | None]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT library_id, item_id, usage_count, last_used_at
+                FROM builtin_usage
+                """
+            ).fetchall()
+        return {
+            (str(row["library_id"]), str(row["item_id"])): (
+                int(row["usage_count"]),
+                datetime.fromisoformat(str(row["last_used_at"]))
+                if row["last_used_at"]
+                else None,
+            )
+            for row in rows
+        }
+
+    def export_library_state(self) -> dict[str, object]:
+        with self._connection() as connection:
+            settings = [
+                {
+                    "library_id": str(row["library_id"]),
+                    "enabled": bool(row["enabled"]),
+                    "profile": str(row["profile"]),
+                    "prefix": str(row["prefix"]),
+                }
+                for row in connection.execute(
+                    """
+                    SELECT library_id, enabled, profile, prefix
+                    FROM builtin_library_settings
+                    ORDER BY library_id
+                    """
+                ).fetchall()
+            ]
+            disabled_items = [
+                {
+                    "library_id": str(row["library_id"]),
+                    "item_id": str(row["item_id"]),
+                }
+                for row in connection.execute(
+                    """
+                    SELECT library_id, item_id
+                    FROM builtin_item_overrides
+                    WHERE disabled = 1
+                    ORDER BY library_id, item_id
+                    """
+                ).fetchall()
+            ]
+            usage = [
+                {
+                    "library_id": str(row["library_id"]),
+                    "item_id": str(row["item_id"]),
+                    "usage_count": int(row["usage_count"]),
+                    "last_used_at": str(row["last_used_at"])
+                    if row["last_used_at"]
+                    else None,
+                }
+                for row in connection.execute(
+                    """
+                    SELECT library_id, item_id, usage_count, last_used_at
+                    FROM builtin_usage
+                    ORDER BY library_id, item_id
+                    """
+                ).fetchall()
+            ]
+        return {
+            "settings": settings,
+            "disabled_items": disabled_items,
+            "usage": usage,
+        }
+
+    def restore_library_state(self, state: dict[str, object]) -> None:
+        settings = state.get("settings", [])
+        disabled_items = state.get("disabled_items", [])
+        usage = state.get("usage", [])
+        if not all(isinstance(value, list) for value in (settings, disabled_items, usage)):
+            raise ValueError("Invalid built-in library state.")
+        with self._connection() as connection:
+            connection.execute("DELETE FROM builtin_library_settings")
+            connection.execute("DELETE FROM builtin_item_overrides")
+            connection.execute("DELETE FROM builtin_usage")
+            for raw in settings:
+                if not isinstance(raw, dict):
+                    raise ValueError("Invalid built-in library settings.")
+                library_id = str(raw.get("library_id", ""))
+                profile = str(raw.get("profile", ""))
+                prefix = str(raw.get("prefix", ""))
+                enabled = raw.get("enabled")
+                _validate_builtin_identifier(library_id, "library")
+                if not isinstance(enabled, bool):
+                    raise ValueError("Invalid built-in library enabled state.")
+                connection.execute(
+                    """
+                    INSERT INTO builtin_library_settings(
+                        library_id, enabled, profile, prefix, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        library_id,
+                        int(enabled),
+                        profile,
+                        prefix,
+                        datetime.now().isoformat(timespec="seconds"),
+                    ),
+                )
+            for raw in disabled_items:
+                if not isinstance(raw, dict):
+                    raise ValueError("Invalid built-in item override.")
+                library_id = str(raw.get("library_id", ""))
+                item_id = str(raw.get("item_id", ""))
+                _validate_builtin_identifier(library_id, "library")
+                _validate_builtin_identifier(item_id, "item")
+                connection.execute(
+                    """
+                    INSERT INTO builtin_item_overrides(library_id, item_id, disabled)
+                    VALUES (?, ?, 1)
+                    """,
+                    (library_id, item_id),
+                )
+            for raw in usage:
+                if not isinstance(raw, dict):
+                    raise ValueError("Invalid built-in usage entry.")
+                library_id = str(raw.get("library_id", ""))
+                item_id = str(raw.get("item_id", ""))
+                usage_count = raw.get("usage_count")
+                last_used_at = raw.get("last_used_at")
+                _validate_builtin_identifier(library_id, "library")
+                _validate_builtin_identifier(item_id, "item")
+                if (
+                    not isinstance(usage_count, int)
+                    or isinstance(usage_count, bool)
+                    or usage_count < 0
+                ):
+                    raise ValueError("Invalid built-in usage count.")
+                if last_used_at is not None:
+                    if not isinstance(last_used_at, str):
+                        raise ValueError("Invalid built-in usage timestamp.")
+                    datetime.fromisoformat(last_used_at)
+                connection.execute(
+                    """
+                    INSERT INTO builtin_usage(
+                        library_id, item_id, usage_count, last_used_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (library_id, item_id, usage_count, last_used_at),
+                )
+
     @staticmethod
     def _row_to_snippet(row: sqlite3.Row) -> Snippet:
         return Snippet(
@@ -610,3 +897,17 @@ class Storage:
             return normalize_search_terms(decoded)
         except ValueError:
             return ()
+
+
+def _validate_builtin_identifier(value: str, label: str) -> None:
+    if (
+        not value
+        or len(value) > 160
+        or any(
+            character.isspace()
+            or ord(character) < 32
+            or ord(character) == 127
+            for character in value
+        )
+    ):
+        raise ValueError(f"Invalid built-in {label} identifier.")

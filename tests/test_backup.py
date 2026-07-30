@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from quicktype.backup import BackupFormatError, export_backup, import_backup
+from quicktype.backup import (
+    BackupFormatError,
+    export_backup,
+    import_backup,
+    import_library_state,
+)
 from quicktype.models import Snippet, SnippetKind, TriggerMode
 
 
@@ -85,6 +90,26 @@ def test_backup_is_utf8_and_human_readable(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "Zażółć gęślą" in text
     assert json.loads(text)["format"] == "quicktype-backup"
+
+
+def test_backup_v2_can_include_builtin_library_state(tmp_path: Path) -> None:
+    path = tmp_path / "full-backup.json"
+    state = {
+        "settings": [
+            {
+                "library_id": "emoji",
+                "enabled": True,
+                "profile": "full",
+                "prefix": ":",
+            }
+        ],
+        "disabled_items": [],
+        "usage": [],
+    }
+
+    export_backup(path, [], library_state=state)
+
+    assert import_library_state(path) == state
 
 
 @pytest.mark.parametrize(

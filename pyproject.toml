@@ -34,7 +34,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-quicktype = ["resources/*.svg"]
+quicktype = ["resources/*.svg", "resources/*.json.gz", "resources/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

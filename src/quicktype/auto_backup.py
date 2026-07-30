@@ -62,7 +62,8 @@ class AutomaticBackupManager:
 
     def create_if_changed(self, snippets: list[Snippet] | None = None) -> Path | None:
         current = snippets if snippets is not None else self.storage.list_snippets()
-        fingerprint = self._fingerprint(current)
+        library_state = self.storage.export_library_state()
+        fingerprint = self._fingerprint(current, library_state)
         if fingerprint == self._last_fingerprint:
             return None
 
@@ -70,7 +71,11 @@ class AutomaticBackupManager:
         destination = self.directory / (
             f"QuickType-auto-{now:%Y%m%d-%H%M%S-%f}.json"
         )
-        export_backup(destination, current)
+        export_backup(
+            destination,
+            current,
+            library_state=library_state,
+        )
         self._last_fingerprint = fingerprint
         self._prune()
         return destination
@@ -87,8 +92,12 @@ class AutomaticBackupManager:
             path.unlink()
 
     @staticmethod
-    def _fingerprint(snippets: list[Snippet]) -> str:
-        values = [
+    def _fingerprint(
+        snippets: list[Snippet],
+        library_state: dict[str, object] | None = None,
+    ) -> str:
+        values: object = {
+            "snippets": [
             {
                 "abbreviation": snippet.abbreviation,
                 "expansion": snippet.expansion,
@@ -103,7 +112,9 @@ class AutomaticBackupManager:
                 "priority": snippet.priority,
             }
             for snippet in snippets
-        ]
+            ],
+            "library_state": library_state or {},
+        }
         encoded = json.dumps(
             values,
             ensure_ascii=False,

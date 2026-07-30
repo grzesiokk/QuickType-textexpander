@@ -87,7 +87,11 @@ def apply_import(
     safety_copy = storage.path.parent / "Backups" / (
         f"QuickType-before-import-{datetime.now():%Y%m%d-%H%M%S-%f}.json"
     )
-    export_backup(safety_copy, storage.list_snippets())
+    export_backup(
+        safety_copy,
+        storage.list_snippets(),
+        library_state=storage.export_library_state(),
+    )
     if mode == ImportMode.UPDATE:
         added, updated = storage.update_import_snippets(
             list(analysis.snippets)

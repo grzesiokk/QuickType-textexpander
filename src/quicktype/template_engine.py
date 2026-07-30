@@ -237,6 +237,23 @@ def _render_token(
         except ValueError as error:
             state.issues.append(TemplateIssue("calculation_error", token, str(error)))
             return None
+    if token.startswith("calc-match:"):
+        identifier = token[11:].strip()
+        expression = state.match_groups.get(identifier)
+        if expression is None:
+            state.issues.append(
+                TemplateIssue(
+                    "missing_match",
+                    token,
+                    f"Regular-expression group '{identifier}' is not available.",
+                )
+            )
+            return None
+        try:
+            return calculate_expression(expression)
+        except ValueError as error:
+            state.issues.append(TemplateIssue("calculation_error", token, str(error)))
+            return None
     if token.startswith("match:"):
         identifier = token[6:].strip()
         if identifier not in state.match_groups:

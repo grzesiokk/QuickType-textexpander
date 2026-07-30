@@ -308,7 +308,7 @@ def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None
         "SELECT value FROM metadata WHERE key = 'schema_version'"
     ).fetchone()[0]
     connection.close()
-    assert schema_version == "6"
+    assert schema_version == "7"
 
 
 def test_advanced_snippet_fields_are_persisted(storage: Storage) -> None:
@@ -329,3 +329,33 @@ def test_advanced_snippet_fields_are_persisted(storage: Storage) -> None:
     assert saved.description == "Order helper"
     assert saved.search_terms == ("invoice", "order")
     assert saved.priority == 25
+
+
+def test_builtin_library_state_round_trip(storage: Storage) -> None:
+    storage.set_builtin_library_settings(
+        "emoji",
+        enabled=True,
+        profile="full",
+        prefix=":",
+    )
+    storage.set_builtin_item_enabled(
+        "emoji",
+        "emoji-smile",
+        enabled=False,
+    )
+    storage.record_builtin_expansion("emoji", "emoji-wave")
+    state = storage.export_library_state()
+
+    replacement = Storage(storage.path.parent / "replacement.sqlite3")
+    replacement.initialize()
+    replacement.restore_library_state(state)
+
+    assert replacement.get_builtin_library_settings("emoji") == (
+        True,
+        "full",
+        ":",
+    )
+    assert replacement.list_disabled_builtin_items("emoji") == {
+        "emoji-smile"
+    }
+    assert replacement.list_builtin_usage()[("emoji", "emoji-wave")][0] == 1

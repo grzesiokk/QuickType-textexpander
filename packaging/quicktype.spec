@@ -7,6 +7,7 @@ project_root = Path(SPECPATH).parent
 source_root = project_root / "src"
 icon_path = project_root / "build_assets" / "quicktype.ico"
 version_path = project_root / "packaging" / "windows_version_info.txt"
+resource_root = source_root / "quicktype" / "resources"
 
 hidden_imports = collect_submodules("comtypes.gen")
 if "comtypes.gen.UIAutomationClient" not in hidden_imports:
@@ -17,10 +18,9 @@ a = Analysis(
     pathex=[str(source_root)],
     binaries=[],
     datas=[
-        (
-            str(source_root / "quicktype" / "resources" / "quicktype.svg"),
-            "quicktype/resources",
-        )
+        (str(path), "quicktype/resources")
+        for path in resource_root.iterdir()
+        if path.is_file()
     ],
     hiddenimports=hidden_imports,
     hookspath=[],

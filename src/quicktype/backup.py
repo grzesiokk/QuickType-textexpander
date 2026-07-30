@@ -26,7 +26,12 @@ class BackupFormatError(ValueError):
     pass
 
 
-def export_backup(path: Path, snippets: list[Snippet]) -> None:
+def export_backup(
+    path: Path,
+    snippets: list[Snippet],
+    *,
+    library_state: dict[str, object] | None = None,
+) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     document = {
@@ -35,6 +40,8 @@ def export_backup(path: Path, snippets: list[Snippet]) -> None:
         "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "snippets": [_snippet_to_dict(snippet) for snippet in snippets],
     }
+    if library_state is not None:
+        document["library_state"] = library_state
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_text(
         json.dumps(document, ensure_ascii=False, indent=2) + "\n",
@@ -44,6 +51,27 @@ def export_backup(path: Path, snippets: list[Snippet]) -> None:
 
 
 def import_backup(path: Path) -> list[Snippet]:
+    document = _read_backup_document(path)
+    raw_snippets = document.get("snippets")
+    assert isinstance(raw_snippets, list)
+    snippets = [_snippet_from_dict(item, index) for index, item in enumerate(raw_snippets)]
+    abbreviations = [snippet.abbreviation for snippet in snippets]
+    if len(abbreviations) != len(set(abbreviations)):
+        raise BackupFormatError("Backup contains duplicate abbreviations.")
+    return snippets
+
+
+def import_library_state(path: Path) -> dict[str, object] | None:
+    document = _read_backup_document(path)
+    state = document.get("library_state")
+    if state is None:
+        return None
+    if not isinstance(state, dict):
+        raise BackupFormatError("Backup contains invalid built-in library state.")
+    return state
+
+
+def _read_backup_document(path: Path) -> dict[str, Any]:
     source = Path(path)
     if source.stat().st_size > MAX_BACKUP_SIZE:
         raise BackupFormatError("Backup file is larger than 10 MB.")
@@ -62,11 +90,7 @@ def import_backup(path: Path) -> list[Snippet]:
     if not isinstance(raw_snippets, list):
         raise BackupFormatError("Backup does not contain a snippets list.")
 
-    snippets = [_snippet_from_dict(item, index) for index, item in enumerate(raw_snippets)]
-    abbreviations = [snippet.abbreviation for snippet in snippets]
-    if len(abbreviations) != len(set(abbreviations)):
-        raise BackupFormatError("Backup contains duplicate abbreviations.")
-    return snippets
+    return document
 
 
 def _snippet_to_dict(snippet: Snippet) -> dict[str, Any]:

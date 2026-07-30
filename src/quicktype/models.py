@@ -35,6 +35,8 @@ class Snippet:
     description: str = ""
     search_terms: tuple[str, ...] = ()
     priority: int = 0
+    source_library: str = ""
+    source_item_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
