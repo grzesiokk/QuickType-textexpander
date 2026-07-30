@@ -4,6 +4,6 @@ regex>=2025.11,<2027
 PyInstaller>=6.11,<7
 pytest>=9.0.3,<10
 pytest-cov>=6,<8
-mypy>=1.14,<2
+mypy>=1.14,<3
 pip-audit>=2.7,<3
 ruff>=0.9,<1
