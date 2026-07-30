@@ -38,6 +38,7 @@ from quicktype.ui import (
     QuickAccessDialog,
     SettingsDialog,
     StatisticsDialog,
+    TemplateAssistantDialog,
     TrayController,
     apply_application_style,
     normalize_theme,
@@ -178,6 +179,19 @@ def test_main_window_loads_selected_snippet_and_switches_language(tmp_path: Path
     assert dialog.selected_clipboard_capture_hotkey == "alt_shift_n"
     assert dialog.selected_backup_retention == 37
     assert dialog.selected_theme == "dark"
+    assert not dialog.selected_clipboard_history_enabled
+    dialog.clipboard_history_checkbox.setChecked(True)
+    assert dialog.selected_clipboard_history_enabled
+
+    assistant = TemplateAssistantDialog(translator)
+    assistant.type_combo.setCurrentIndex(assistant.type_combo.findData("transform"))
+    assistant.transform_combo.setCurrentIndex(
+        assistant.transform_combo.findData("default")
+    )
+    assistant.identifier_edit.setText("var:name")
+    assistant.values_edit.setText("Brak|danych")
+    assert assistant.token == r"{{default:var:name|Brak\|danych}}"
+    assistant.deleteLater()
     dialog.deleteLater()
     window.deleteLater()
     application.processEvents()

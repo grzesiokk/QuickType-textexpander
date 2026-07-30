@@ -15,6 +15,7 @@ from .auto_backup import (
     normalize_backup_retention,
 )
 from .builtin_libraries import BuiltinCatalog
+from .clipboard_history import ClipboardHistory
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
 from .hook import KeyboardHookEngine
 from .hotkeys import (
@@ -72,6 +73,11 @@ class QuickTypeController:
         theme = normalize_theme(
             self.storage.get_setting("theme", "light")
         )
+        clipboard_history_enabled = (
+            self.storage.get_setting("clipboard_history_enabled", "0") == "1"
+        )
+        self.clipboard_history = ClipboardHistory()
+        application.clipboard().dataChanged.connect(self._on_clipboard_changed)
         apply_application_style(self.application, theme)
         self.backups = AutomaticBackupManager(
             self.storage,
@@ -103,12 +109,14 @@ class QuickTypeController:
             excluded_processes=excluded_processes,
             quick_access_hotkey=quick_access_hotkey,
             clipboard_capture_hotkey=clipboard_capture_hotkey,
+            clipboard_history_enabled=clipboard_history_enabled,
         )
         self.quick_access = QuickAccessDialog(
             self.storage,
             self.translator,
             self.catalog,
             quick_access_hotkey=quick_access_hotkey,
+            clipboard_history=self.clipboard_history,
         )
         self.tray = TrayController(
             self.translator,
@@ -142,6 +150,9 @@ class QuickTypeController:
         self.window.clipboard_capture_hotkey_change_requested.connect(
             self.set_clipboard_capture_hotkey
         )
+        self.window.clipboard_history_change_requested.connect(
+            self.set_clipboard_history_enabled
+        )
         self.window.snippets_changed.connect(self.refresh_snippets)
         self.window.builtin_libraries_changed.connect(self.refresh_snippets)
         self.window.quick_search_requested.connect(self.open_quick_search)
@@ -154,6 +165,9 @@ class QuickTypeController:
         )
         self.signals.form_requested.connect(self._on_form_requested)
         self.quick_access.snippet_chosen.connect(self._quick_access_chosen)
+        self.quick_access.clipboard_history_clear_requested.connect(
+            self.clear_clipboard_history
+        )
         self.application.aboutToQuit.connect(self.shutdown)
         self._form_values: dict[tuple[str, str], str] = {}
 
@@ -291,6 +305,25 @@ class QuickTypeController:
         self.engine.set_clipboard_capture_hotkey(normalized)
         self.window.set_clipboard_capture_hotkey(normalized)
 
+    def set_clipboard_history_enabled(self, enabled: bool) -> None:
+        self.storage.set_setting("clipboard_history_enabled", "1" if enabled else "0")
+        if not enabled:
+            self.clipboard_history.clear()
+        self.window.set_clipboard_history_enabled(enabled)
+        self.quick_access.refresh_history()
+
+    def _on_clipboard_changed(self) -> None:
+        if self.storage.get_setting("clipboard_history_enabled", "0") != "1":
+            return
+        text = self.application.clipboard().text()
+        if self.clipboard_history.add(text):
+            self.quick_access.refresh_history()
+
+    def clear_clipboard_history(self) -> None:
+        self.clipboard_history.clear()
+        self.quick_access.refresh_history()
+        self.window.status_message.setText(self.translator("clipboard_history_cleared"))
+
     def _on_expanded(self, snippet: object) -> None:
         abbreviation = getattr(snippet, "abbreviation", "")
         snippet_id = getattr(snippet, "id", None)
@@ -313,6 +346,17 @@ class QuickTypeController:
         self.tray.show_error(text)
 
     def _quick_access_chosen(self, snippet: object, target_window: int) -> None:
+        if isinstance(snippet, str):
+            if not restore_foreground_window(target_window):
+                self.window.status_message.setText(
+                    self.translator("quick_access_target_error")
+                )
+                return
+            QTimer.singleShot(
+                120,
+                lambda: self._insert_clipboard_text(snippet, target_window),
+            )
+            return
         if not isinstance(snippet, Snippet) or not restore_foreground_window(target_window):
             self.window.status_message.setText(self.translator("quick_access_target_error"))
             return
@@ -394,12 +438,19 @@ class QuickTypeController:
         if not self.engine.expand_directly(snippet, target_window):
             self.window.status_message.setText(self.translator("quick_access_target_error"))
 
+    def _insert_clipboard_text(self, text: str, target_window: int) -> None:
+        if not self.engine.insert_text(text, target_window):
+            self.window.status_message.setText(
+                self.translator("quick_access_target_error")
+            )
+
     def quit(self) -> None:
         if self.window.prepare_quit():
             self.application.quit()
 
     def shutdown(self) -> None:
         self.engine.stop()
+        self.clipboard_history.clear()
 
 
 def run(argv: list[str] | None = None) -> int:

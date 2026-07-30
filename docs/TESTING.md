@@ -107,3 +107,20 @@ Before publishing a release:
     zero, excessive exponentiation, and an invalid expression.
 27. Open Help → Data sources and licenses and verify the bundled Unicode,
     GeoNames, and LanguageTool notices.
+28. On a fresh database, confirm Clipboard history is disabled. Enable it,
+    copy Unicode and multiline text in another application, open Quick Access,
+    and verify that `clip:` and `schowek:` show only matching history entries.
+29. Select a clipboard-history entry and press Enter. Confirm it inserts into
+    the original application, does not change snippet usage statistics, and is
+    blocked in an excluded application or recognized password field.
+30. Copy more than 50 distinct entries and more than 1 MiB of text. Confirm
+    the oldest entries are evicted, oversized entries are ignored, duplicate
+    text moves to the top, and ordinary Quick Access search does not show
+    clipboard history.
+31. Clear clipboard history, disable it, and restart QuickType. Confirm no
+    clipboard entries remain and no clipboard text appears in backups,
+    exports, or diagnostic reports.
+32. Create snippets using `upper`, `lower`, `title`, `trim`, and `default`
+    filters for form values, clipboard text, and regex groups. Verify Unicode,
+    empty/missing fallbacks, escaped pipes, preview output, and malformed-token
+    validation in both Polish and English.

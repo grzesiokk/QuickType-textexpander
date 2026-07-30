@@ -77,6 +77,7 @@ from .builtin_libraries import (
     BuiltinLibrarySettings,
     BuiltinLibrarySettingsError,
 )
+from .clipboard_history import ClipboardHistory
 from .constants import APP_NAME, APP_VERSION, resource_path
 from .diagnostics import collect_diagnostic_report
 from .hotkeys import (
@@ -237,7 +238,7 @@ class ExpansionFormDialog(QDialog):
 
 
 class TemplateAssistantDialog(QDialog):
-    TYPES = ("input", "choice", "check", "var", "calc", "snippet")
+    TYPES = ("input", "choice", "check", "var", "calc", "snippet", "transform")
 
     def __init__(
         self,
@@ -258,6 +259,15 @@ class TemplateAssistantDialog(QDialog):
             )
         self.type_combo.currentIndexChanged.connect(self._update_help)
         layout.addRow(self.t("template_field_type"), self.type_combo)
+
+        self.transform_combo = QComboBox()
+        for operation in ("upper", "lower", "title", "trim", "default"):
+            self.transform_combo.addItem(
+                self.t(f"template_transform_{operation}"),
+                operation,
+            )
+        self.transform_label = QLabel(self.t("template_transform_type"))
+        layout.addRow(self.transform_label, self.transform_combo)
 
         self.identifier_edit = QLineEdit()
         layout.addRow(self.t("template_identifier"), self.identifier_edit)
@@ -311,6 +321,12 @@ class TemplateAssistantDialog(QDialog):
             return "{{var:" + identifier + "}}"
         if token_type == "calc":
             return "{{calc:" + self.identifier_edit.text().strip() + "}}"
+        if token_type == "transform":
+            operation = str(self.transform_combo.currentData())
+            source = self.identifier_edit.text().strip()
+            if operation == "default":
+                return "{{default:" + source + "|" + escape_field_part(raw_values) + "}}"
+            return "{{" + operation + ":" + source + "}}"
         return "{{snippet:" + self.identifier_edit.text().strip() + "}}"
 
     def _accept_if_valid(self) -> None:
@@ -337,8 +353,13 @@ class TemplateAssistantDialog(QDialog):
     def _update_help(self) -> None:
         token_type = str(self.type_combo.currentData())
         self.help_label.setText(self.t(f"template_help_{token_type}"))
+        self.transform_combo.setEnabled(token_type == "transform")
+        self.transform_combo.setVisible(token_type == "transform")
+        self.transform_label.setVisible(token_type == "transform")
         self.label_edit.setEnabled(token_type in {"input", "choice", "check"})
-        self.values_edit.setEnabled(token_type in {"input", "choice", "check"})
+        self.values_edit.setEnabled(
+            token_type in {"input", "choice", "check", "transform"}
+        )
 
 
 class SettingsDialog(QDialog):
@@ -355,6 +376,7 @@ class SettingsDialog(QDialog):
         backup_retention: int = 20,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
+        clipboard_history_enabled: bool = False,
         theme: str = "light",
         parent: QWidget | None = None,
     ) -> None:
@@ -403,6 +425,12 @@ class SettingsDialog(QDialog):
             self.t("backup_retention"),
             self.backup_retention_spin,
         )
+
+        self.clipboard_history_checkbox = QCheckBox(
+            self.t("clipboard_history_enabled")
+        )
+        self.clipboard_history_checkbox.setChecked(clipboard_history_enabled)
+        form.addRow("", self.clipboard_history_checkbox)
 
         self.quick_access_hotkey_combo = QComboBox()
         for hotkey in HOTKEY_SPECS:
@@ -499,6 +527,10 @@ class SettingsDialog(QDialog):
         )
 
     @property
+    def selected_clipboard_history_enabled(self) -> bool:
+        return self.clipboard_history_checkbox.isChecked()
+
+    @property
     def selected_backup_retention(self) -> int:
         return self.backup_retention_spin.value()
 
@@ -540,7 +572,9 @@ class QuickAccessModel(QAbstractTableModel):
             values = (
                 ("★ " if entry.favorite else "") + entry.title,
                 self.t(f"search_source_{entry.source}"),
-                entry.abbreviation,
+                self.t("clipboard_source_shortcut")
+                if entry.source == "clipboard"
+                else entry.abbreviation,
                 entry.preview,
             )
             return values[index.column()]
@@ -569,6 +603,7 @@ class QuickAccessModel(QAbstractTableModel):
 
 class QuickAccessDialog(QDialog):
     snippet_chosen = Signal(object, int)
+    clipboard_history_clear_requested = Signal()
 
     def __init__(
         self,
@@ -576,12 +611,14 @@ class QuickAccessDialog(QDialog):
         translator: Translator,
         catalog: BuiltinCatalog | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
+        clipboard_history: ClipboardHistory | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.storage = storage
         self.t = translator
         self.catalog = catalog
+        self.clipboard_history = clipboard_history
         self.index = SearchIndex(())
         self.results: list[SearchEntry] = []
         self._target_window = 0
@@ -595,11 +632,18 @@ class QuickAccessDialog(QDialog):
         self.resize(860, 480)
 
         layout = QVBoxLayout(self)
+        search_row = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.apply_filter)
         self.search_edit.returnPressed.connect(self.choose_current)
-        layout.addWidget(self.search_edit)
+        search_row.addWidget(self.search_edit, 1)
+        self.clear_history_button = QPushButton()
+        self.clear_history_button.clicked.connect(
+            self.clipboard_history_clear_requested.emit
+        )
+        search_row.addWidget(self.clear_history_button)
+        layout.addLayout(search_row)
 
         self.table = QTableView()
         self.model = QuickAccessModel(self.t, self.table)
@@ -623,6 +667,7 @@ class QuickAccessDialog(QDialog):
     def retranslate(self) -> None:
         self.setWindowTitle(self.t("quick_access"))
         self.search_edit.setPlaceholderText(self.t("quick_access_search"))
+        self.clear_history_button.setText(self.t("clear_clipboard_history"))
         self.model.headerDataChanged.emit(
             Qt.Orientation.Horizontal,
             0,
@@ -645,6 +690,11 @@ class QuickAccessDialog(QDialog):
             self.storage.list_snippets(),
             self.catalog,
             process_name=process_name_from_window(target_window),
+            clipboard_history=(
+                self.clipboard_history.items
+                if self.clipboard_history is not None
+                else ()
+            ),
         )
         self.search_edit.clear()
         self.apply_filter("")
@@ -652,6 +702,22 @@ class QuickAccessDialog(QDialog):
         self.raise_()
         self.activateWindow()
         self.search_edit.setFocus()
+
+    def refresh_history(self) -> None:
+        if not self.isVisible():
+            return
+        target_window = self._target_window
+        self.index = SearchIndex.build(
+            self.storage.list_snippets(),
+            self.catalog,
+            process_name=process_name_from_window(target_window),
+            clipboard_history=(
+                self.clipboard_history.items
+                if self.clipboard_history is not None
+                else ()
+            ),
+        )
+        self.apply_filter(self.search_edit.text())
 
     def apply_filter(self, text: str) -> None:
         self.results = self.index.search(text)
@@ -666,9 +732,10 @@ class QuickAccessDialog(QDialog):
         if not current.isValid() or not 0 <= current.row() < len(self.results):
             return
         target_window = self._target_window
-        snippet = self.results[current.row()].snippet
+        entry = self.results[current.row()]
+        chosen = entry.snippet if entry.snippet is not None else entry.clipboard_text
         self.hide()
-        self.snippet_chosen.emit(snippet, target_window)
+        self.snippet_chosen.emit(chosen, target_window)
 
 
 class BuiltinLibraryManagerDialog(QDialog):
@@ -1912,6 +1979,7 @@ class MainWindow(QMainWindow):
     excluded_processes_change_requested = Signal(object)
     quick_access_hotkey_change_requested = Signal(str)
     clipboard_capture_hotkey_change_requested = Signal(str)
+    clipboard_history_change_requested = Signal(bool)
     snippets_changed = Signal()
     builtin_libraries_changed = Signal()
     quick_search_requested = Signal()
@@ -1930,6 +1998,7 @@ class MainWindow(QMainWindow):
         excluded_processes: set[str] | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
+        clipboard_history_enabled: bool = False,
         theme: str = "light",
     ) -> None:
         super().__init__()
@@ -1950,6 +2019,7 @@ class MainWindow(QMainWindow):
                 clipboard_capture_hotkey
             )
         )
+        self.clipboard_history_enabled = clipboard_history_enabled
         self.snippets: list[Snippet] = []
         self._current_id: int | None = None
         self._is_new = False
@@ -3590,6 +3660,7 @@ class MainWindow(QMainWindow):
             database_path=self.storage.path,
             quick_access_hotkey=self.quick_access_hotkey,
             clipboard_capture_hotkey=self.clipboard_capture_hotkey,
+            clipboard_history_enabled=self.clipboard_history_enabled,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -3625,6 +3696,10 @@ class MainWindow(QMainWindow):
             self.clipboard_capture_hotkey_change_requested.emit(
                 dialog.selected_clipboard_capture_hotkey
             )
+        if dialog.selected_clipboard_history_enabled != self.clipboard_history_enabled:
+            self.clipboard_history_change_requested.emit(
+                dialog.selected_clipboard_history_enabled
+            )
 
     def set_engine_active(self, active: bool) -> None:
         self.engine_active = active
@@ -3654,6 +3729,9 @@ class MainWindow(QMainWindow):
         self.clipboard_capture_hotkey = (
             normalize_clipboard_capture_hotkey(hotkey)
         )
+
+    def set_clipboard_history_enabled(self, enabled: bool) -> None:
+        self.clipboard_history_enabled = enabled
 
     def refresh_usage(self, snippet: Snippet) -> None:
         self.snippets = [

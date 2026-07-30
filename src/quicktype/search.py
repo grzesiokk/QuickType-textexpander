@@ -16,6 +16,7 @@ from .builtin_libraries import (
     BuiltinLibraryId,
     BuiltinLibrarySettings,
 )
+from .clipboard_history import ClipboardHistoryItem
 from .models import Snippet, SnippetKind
 
 MAX_SEARCH_RESULTS = 200
@@ -24,6 +25,9 @@ _QUERY_PART = re.compile(
     r'(?:(?P<scope>[\w-]+):)?(?:"(?P<quoted>[^"]+)"|(?P<word>\S+))'
 )
 _SCOPE_ALIASES = {
+    "clip": "clipboard",
+    "clipboard": "clipboard",
+    "schowek": "clipboard",
     "emoji": BuiltinLibraryId.EMOJI.value,
     "flaga": BuiltinLibraryId.FLAGS.value,
     "flagi": BuiltinLibraryId.FLAGS.value,
@@ -83,7 +87,8 @@ class SearchEntry:
     category: str
     preview: str
     source: str
-    snippet: Snippet
+    snippet: Snippet | None = None
+    clipboard_text: str | None = None
     favorite: bool = False
     usage_count: int = 0
     last_used_at: datetime | None = None
@@ -101,11 +106,13 @@ class SearchIndex:
         catalog: BuiltinCatalog | None = None,
         builtin_sources: tuple[_BuiltinSource, ...] = (),
         builtin_usage: dict[tuple[str, str], tuple[int, datetime | None]] | None = None,
+        clipboard_entries: tuple[SearchEntry, ...] = (),
     ) -> None:
         self.entries = tuple(entries)
         self.catalog = catalog
         self.builtin_sources = builtin_sources
         self.builtin_usage = builtin_usage or {}
+        self.clipboard_entries = clipboard_entries
 
     @classmethod
     def build(
@@ -114,6 +121,7 @@ class SearchIndex:
         catalog: BuiltinCatalog | None = None,
         *,
         process_name: str = "",
+        clipboard_history: Iterable[ClipboardHistoryItem] = (),
     ) -> SearchIndex:
         entries = [
             _user_entry(snippet)
@@ -153,6 +161,9 @@ class SearchIndex:
             catalog=catalog,
             builtin_sources=tuple(sources),
             builtin_usage=usage,
+            clipboard_entries=tuple(
+                _clipboard_entry(item) for item in clipboard_history
+            ),
         )
 
     def search(
@@ -185,11 +196,20 @@ class SearchIndex:
         for entry_index, entry in enumerate(self.entries):
             if query.source_scope and entry.source != query.source_scope:
                 continue
+            if entry.source == "clipboard" and query.source_scope != "clipboard":
+                continue
             if terms and not all(term in entry._haystack for term in terms):
                 continue
             if recent_only and entry.last_used_at is None:
                 continue
             consider(_score(entry, terms, now), -1, entry_index)
+
+        for item_index, entry in enumerate(self.clipboard_entries):
+            if query.source_scope != "clipboard":
+                continue
+            if terms and not all(term in entry._haystack for term in terms):
+                continue
+            consider(_score(entry, terms, now), -2, item_index)
 
         for source_index, source in enumerate(self.builtin_sources):
             library_id = source.definition.library_id
@@ -238,6 +258,8 @@ class SearchIndex:
         for score, _order, source_index, item_index in heap:
             if source_index == -1:
                 entry = self.entries[item_index]
+            elif source_index == -2:
+                entry = self.clipboard_entries[item_index]
             else:
                 source = self.builtin_sources[source_index]
                 item = source.items[item_index]
@@ -338,6 +360,26 @@ def _builtin_entry(
         item=item,
         _title_search=normalize_search_text(item.title),
         _abbreviation_search=normalize_search_text(abbreviation),
+        _haystack=haystack,
+    )
+
+
+def _clipboard_entry(item: ClipboardHistoryItem) -> SearchEntry:
+    first_line = item.text.replace("\r", "").split("\n", 1)[0].strip()
+    title = first_line[:80] or "Clipboard"
+    preview = item.text.replace("\r", "").replace("\n", " ↵ ")
+    haystack = normalize_search_text(item.text)
+    return SearchEntry(
+        key=f"clipboard:{item.captured_at.isoformat()}:{hash(item.text)}",
+        title=title,
+        abbreviation="clipboard",
+        category="",
+        preview=preview,
+        source="clipboard",
+        clipboard_text=item.text,
+        last_used_at=item.captured_at,
+        _title_search=normalize_search_text(title),
+        _abbreviation_search="clipboard",
         _haystack=haystack,
     )
 

@@ -14,6 +14,7 @@ FIELD_ID_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}\Z")
 MAX_CALC_LENGTH = 200
 MAX_SNIPPET_DEPTH = 10
 MAX_RESULT_MAGNITUDE = Decimal("1e100")
+TEXT_TRANSFORMS = frozenset({"upper", "lower", "title", "trim", "default"})
 
 
 class FormFieldKind(StrEnum):
@@ -205,6 +206,8 @@ def _render_token(
         value = _field_value(field, state.values)
         state.values.setdefault(field.identifier, value)
         return value
+    if ":" in token and token.split(":", 1)[0] in TEXT_TRANSFORMS:
+        return _render_text_transform(token, state)
     if token.startswith("var:"):
         identifier = token[4:].strip()
         if not FIELD_ID_RE.fullmatch(identifier):
@@ -328,6 +331,117 @@ def _format_datetime(
     except (ValueError, TypeError) as error:
         issues.append(TemplateIssue("invalid_format", token, str(error)))
         return None
+
+
+def _render_text_transform(token: str, state: _RenderState) -> str | None:
+    operation, payload = token.split(":", 1)
+    if operation == "default":
+        parts = _split_escaped(payload)
+        if len(parts) != 2 or not parts[0].strip():
+            state.issues.append(
+                TemplateIssue(
+                    "invalid_transform",
+                    token,
+                    "Default transform requires a source and fallback separated by '|'.",
+                )
+            )
+            return None
+        value = _resolve_transform_source(
+            parts[0].strip(),
+            state,
+            token=token,
+            allow_missing=True,
+        )
+        if value is None:
+            return None
+        return value or parts[1]
+
+    source = payload.strip()
+    if not source:
+        state.issues.append(
+            TemplateIssue(
+                "invalid_transform",
+                token,
+                "A text transform requires a source.",
+            )
+        )
+        return None
+    value = _resolve_transform_source(source, state, token=token)
+    if value is None:
+        return None
+    if operation == "upper":
+        return value.upper()
+    if operation == "lower":
+        return value.lower()
+    if operation == "title":
+        return value.title()
+    return value.strip()
+
+
+def _resolve_transform_source(
+    source: str,
+    state: _RenderState,
+    *,
+    token: str,
+    allow_missing: bool = False,
+) -> str | None:
+    if source == "clipboard":
+        if state.clipboard_provider is None:
+            return state.clipboard_text
+        try:
+            return state.clipboard_provider() or ""
+        except Exception as error:  # Clipboard access can transiently fail on Windows.
+            state.issues.append(TemplateIssue("clipboard_error", token, str(error)))
+            return None
+
+    if source.startswith("var:"):
+        identifier = source[4:].strip()
+        if not FIELD_ID_RE.fullmatch(identifier):
+            state.issues.append(
+                TemplateIssue("invalid_variable", token, "Invalid variable identifier.")
+            )
+            return None
+        if identifier not in state.values:
+            if allow_missing:
+                return ""
+            state.issues.append(
+                TemplateIssue(
+                    "missing_variable",
+                    token,
+                    f"No value was provided for variable '{identifier}'.",
+                )
+            )
+            return None
+        return state.values[identifier]
+
+    if source.startswith("match:"):
+        identifier = source[6:].strip()
+        if not identifier:
+            state.issues.append(
+                TemplateIssue("invalid_transform", token, "Match group is required.")
+            )
+            return None
+        if identifier not in state.match_groups:
+            if allow_missing:
+                return ""
+            state.issues.append(
+                TemplateIssue(
+                    "missing_match",
+                    token,
+                    f"Regular-expression group '{identifier}' is not available.",
+                )
+            )
+            return None
+        return state.match_groups[identifier]
+
+    state.issues.append(
+        TemplateIssue(
+            "invalid_transform",
+            token,
+            "Transform source must be clipboard, var:id, or match:id.",
+        )
+    )
+    return None
 
 
 def _split_escaped(value: str) -> list[str]:

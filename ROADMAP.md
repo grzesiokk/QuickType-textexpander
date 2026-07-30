@@ -50,6 +50,10 @@ All phases planned for the local Windows 11 edition are complete.
   size and backup counts, and direct access to the portable data folder.
 - **Keyboard and clipboard workflow:** search focus and filter-clearing
   shortcuts plus rendered-copy actions for the editor and snippet context menu.
+- **Session clipboard history:** opt-in, bounded in-memory text history with
+  `clip:` / `schowek:` picker scopes and guarded direct insertion.
+- **Template transforms:** Unicode `upper`, `lower`, `title`, `trim`, and
+  `default` filters for form values, clipboard text, and regex groups.
 - **Clipboard capture:** create an unsaved multiline Unicode snippet directly
   from the toolbar, `Ctrl+Shift+N`, or the system-tray menu.
 - **Global capture shortcut:** configurable Windows-wide clipboard capture that
@@ -76,3 +80,9 @@ Cloud synchronization, shared team libraries, images, arbitrary scripts,
 AI features, and macOS support are not planned for this private offline
 edition. Keeping these features out preserves the application's local-only
 privacy and compact scope.
+
+## Next edition
+
+Contextual snippet profiles for switching between task-specific libraries are
+deferred to QuickType 2.2. They are intentionally separate from the session
+clipboard history and do not change the 2.1 data format.

@@ -55,6 +55,33 @@ def test_inspection_does_not_require_live_clipboard() -> None:
     assert inspect_template("{{clipboard}}") == ()
 
 
+def test_text_transforms_render_unicode_sources_and_default_values() -> None:
+    rendered = render_template(
+        "{{upper:var:name}}|{{lower:clipboard}}|{{title:match:1}}|"
+        "{{trim:var:company}}|{{default:var:missing|Brak\\|danych}}",
+        values={"name": "Zażółć", "company": "  ACME  "},
+        clipboard_text="MIXED TEXT",
+        match_groups={"1": "jan kowalski"},
+        now=NOW,
+    )
+
+    assert rendered.text == "ZAŻÓŁĆ|mixed text|Jan Kowalski|ACME|Brak|danych"
+    assert not rendered.issues
+
+
+def test_text_transform_missing_source_is_an_issue_but_default_is_safe() -> None:
+    missing = render_template("{{upper:var:missing}}", now=NOW)
+    fallback = render_template("{{default:match:nope|fallback}}", now=NOW)
+    invalid = render_template("{{upper:literal}}", now=NOW)
+
+    assert missing.text == "{{upper:var:missing}}"
+    assert missing.issues[0].code == "missing_variable"
+    assert fallback.text == "fallback"
+    assert not fallback.issues
+    assert invalid.text == "{{upper:literal}}"
+    assert invalid.issues[0].code == "invalid_transform"
+
+
 def test_collects_and_renders_form_fields_and_variables() -> None:
     template = (
         "{{input:name|Klient|Anna}} / "

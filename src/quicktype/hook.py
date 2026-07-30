@@ -213,6 +213,13 @@ class ExpansionTask:
     values: tuple[tuple[str, str], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class TextInsertionTask:
+    text: str
+    foreground_window: int
+    require_active: bool = False
+
+
 class KeyboardHookEngine:
     def __init__(
         self,
@@ -244,7 +251,7 @@ class KeyboardHookEngine:
         )
         self._active = True
         self._active_lock = threading.Lock()
-        self._tasks: queue.Queue[ExpansionTask | None] = queue.Queue()
+        self._tasks: queue.Queue[ExpansionTask | TextInsertionTask | None] = queue.Queue()
         self._hook_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._hook_thread_id = 0
@@ -494,9 +501,13 @@ class KeyboardHookEngine:
                 if task is None:
                     return
                 try:
-                    self._perform_expansion(task)
+                    if isinstance(task, TextInsertionTask):
+                        self._perform_text_insertion(task)
+                    else:
+                        self._perform_expansion(task)
                 except Exception as error:
-                    self._restore_suppressed_input(task.action)
+                    if isinstance(task, ExpansionTask):
+                        self._restore_suppressed_input(task.action)
                     if self.on_error:
                         self.on_error(str(error))
         finally:
@@ -541,6 +552,16 @@ class KeyboardHookEngine:
             raise RuntimeError("SendInput did not accept all keyboard events")
         if self.on_expansion:
             self.on_expansion(task.action.snippet)
+
+    def _perform_text_insertion(self, task: TextInsertionTask) -> None:
+        if (
+            (task.require_active and not self.active)
+            or int(user32.GetForegroundWindow() or 0) != task.foreground_window
+            or self._password_detector.is_password_field()
+        ):
+            return
+        if not _send_inputs(_text_inputs(task.text)):
+            raise RuntimeError("SendInput did not accept all keyboard events")
 
     def _restore_suppressed_input(self, action: ExpansionAction) -> None:
         inputs: list[INPUT] = []
@@ -650,6 +671,21 @@ class KeyboardHookEngine:
                 values=tuple((values or {}).items()),
             )
         )
+
+    def insert_text(self, text: str, foreground_window: int) -> bool:
+        if not text or not foreground_window or self._is_own_window(foreground_window):
+            return False
+        process_name = process_name_from_window(foreground_window).casefold()
+        with self._active_lock:
+            if process_name in self._excluded_processes:
+                return False
+        self._tasks.put_nowait(
+            TextInsertionTask(
+                text=text,
+                foreground_window=foreground_window,
+            )
+        )
+        return True
 
     def cancel_action(self, action: ExpansionAction) -> None:
         self._restore_suppressed_input(action)

@@ -11,6 +11,7 @@ from quicktype.hook import (
     KEYEVENTF_UNICODE,
     VK_RETURN,
     KeyboardHookEngine,
+    TextInsertionTask,
     _text_inputs,
 )
 from quicktype.models import Snippet, TriggerMode
@@ -181,3 +182,21 @@ def test_direct_expansion_is_queued_without_requiring_active(monkeypatch) -> Non
         applications=("Code.exe",),
     )
     assert not engine.expand_directly(scoped, 42)
+
+
+def test_direct_text_insertion_is_queued_without_snippet_usage(monkeypatch) -> None:
+    engine = KeyboardHookEngine([])
+    monkeypatch.setattr(engine, "_is_own_window", lambda _window: False)
+    monkeypatch.setattr(
+        hook_module,
+        "process_name_from_window",
+        lambda _window: "Notepad.exe",
+    )
+
+    assert engine.insert_text("Zażółć", 42)
+    task = engine._tasks.get_nowait()
+
+    assert isinstance(task, TextInsertionTask)
+    assert task.text == "Zażółć"
+    assert task.foreground_window == 42
+    assert not task.require_active

@@ -10,9 +10,8 @@ Python on the target computer.
 
 ![QuickType running on Windows 11](docs/quicktype-screenshot.png)
 
-QuickType 2.0 adds optional Polish productivity libraries, virtual quick
-search, forms, calculations, snippet composition, and bounded regular
-expressions while remaining fully local.
+QuickType 2.1 adds an optional session-only clipboard history and safe text
+transforms in templates while remaining fully local.
 
 ## Ready-to-use application
 
@@ -96,6 +95,11 @@ Supported variables:
 | `{{calc:expression}}` | Decimal calculation without `eval` |
 | `{{snippet:abbreviation}}` | Expansion of another enabled snippet |
 | `{{match:1}}` / `{{match:name}}` | Numbered or named regex group |
+| `{{upper:var:id}}` | Uppercase value from a field, clipboard, or regex group |
+| `{{lower:clipboard}}` | Lowercase current clipboard text |
+| `{{title:match:name}}` | Title-case regex group |
+| `{{trim:var:id}}` | Remove surrounding whitespace |
+| `{{default:var:id\|fallback}}` | Fallback for a missing or empty value |
 
 The template assistant inserts and escapes advanced markers. All fields from
 one expansion appear in a single dialog. Values are remembered only until
@@ -123,6 +127,14 @@ Template variables and the cursor marker are rendered in the same way as with
 typed abbreviations. **Esc** closes the quick-access window without inserting.
 Mark important snippets as favorites to keep them at the top of this list.
 Other snippets are ordered by their usage count.
+
+If **Clipboard history** is enabled in Settings, use `clip:` or `schowek:` in
+the same picker to search the last 50 text clipboard entries. For example,
+`clip:adres` searches only the clipboard history. Press Enter to insert the
+selected text into the original window. The history is disabled by default,
+kept only in memory for the current session, limited to 1 MiB, and never
+included in SQLite data, backups, exports, or diagnostics. Use **Clear
+clipboard history** in the picker to remove it immediately.
 
 ## Built-in libraries
 
