@@ -166,6 +166,10 @@ RESTORABLE_FIELDS = (
     "category",
     "favorite",
     "applications",
+    "kind",
+    "description",
+    "search_terms",
+    "priority",
 )
 
 

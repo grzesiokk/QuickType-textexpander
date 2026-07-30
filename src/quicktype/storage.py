@@ -9,13 +9,17 @@ from typing import Iterator
 
 from .models import (
     Snippet,
+    SnippetKind,
     TriggerMode,
     normalize_applications,
-    validate_abbreviation,
+    normalize_priority,
+    normalize_search_terms,
     validate_category,
+    validate_description,
+    validate_snippet_trigger,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class DuplicateAbbreviationError(ValueError):
@@ -53,7 +57,13 @@ class Storage:
                     last_used_at TEXT,
                     category TEXT NOT NULL DEFAULT '',
                     favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0, 1)),
-                    applications TEXT NOT NULL DEFAULT '[]'
+                    applications TEXT NOT NULL DEFAULT '[]',
+                    kind TEXT NOT NULL DEFAULT 'literal'
+                        CHECK(kind IN ('literal', 'regex')),
+                    description TEXT NOT NULL DEFAULT '',
+                    search_terms TEXT NOT NULL DEFAULT '[]',
+                    priority INTEGER NOT NULL DEFAULT 0
+                        CHECK(priority BETWEEN -1000 AND 1000)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_snippets_enabled
@@ -81,6 +91,22 @@ class Storage:
             if "applications" not in columns:
                 connection.execute(
                     "ALTER TABLE snippets ADD COLUMN applications TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "kind" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN kind TEXT NOT NULL DEFAULT 'literal'"
+                )
+            if "description" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+                )
+            if "search_terms" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN search_terms TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "priority" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
                 )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_snippets_category "
@@ -111,7 +137,8 @@ class Storage:
             rows = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at, category, favorite, applications
+                       usage_count, last_used_at, category, favorite, applications,
+                       kind, description, search_terms, priority
                 FROM snippets
                 ORDER BY abbreviation COLLATE NOCASE, id
                 """
@@ -131,7 +158,8 @@ class Storage:
             row = connection.execute(
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                       usage_count, last_used_at, category, favorite, applications
+                       usage_count, last_used_at, category, favorite, applications,
+                       kind, description, search_terms, priority
                 FROM snippets WHERE id = ?
                 """,
                 (snippet_id,),
@@ -193,7 +221,7 @@ class Storage:
         return cursor.rowcount
 
     def save_snippet(self, snippet: Snippet) -> Snippet:
-        issues = validate_abbreviation(snippet.abbreviation)
+        issues = validate_snippet_trigger(snippet.abbreviation, snippet.kind)
         if issues:
             raise ValueError(issues[0].message)
         category = snippet.category.strip()
@@ -201,6 +229,12 @@ class Storage:
         if category_issues:
             raise ValueError(category_issues[0].message)
         applications = normalize_applications(snippet.applications)
+        description = snippet.description.strip()
+        description_issues = validate_description(description)
+        if description_issues:
+            raise ValueError(description_issues[0].message)
+        search_terms = normalize_search_terms(snippet.search_terms)
+        priority = normalize_priority(snippet.priority)
         timestamp = datetime.now().isoformat(timespec="seconds")
 
         try:
@@ -210,8 +244,9 @@ class Storage:
                         """
                         INSERT INTO snippets(
                             abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                            usage_count, last_used_at, category, favorite, applications
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            usage_count, last_used_at, category, favorite, applications,
+                            kind, description, search_terms, priority
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             snippet.abbreviation,
@@ -227,6 +262,10 @@ class Storage:
                             category,
                             int(snippet.favorite),
                             json.dumps(applications, ensure_ascii=False),
+                            snippet.kind.value,
+                            description,
+                            json.dumps(search_terms, ensure_ascii=False),
+                            priority,
                         ),
                     )
                     if cursor.lastrowid is None:
@@ -240,7 +279,8 @@ class Storage:
                         UPDATE snippets
                         SET abbreviation = ?, expansion = ?, trigger_mode = ?,
                             enabled = ?, updated_at = ?, category = ?, favorite = ?,
-                            applications = ?
+                            applications = ?, kind = ?, description = ?,
+                            search_terms = ?, priority = ?
                         WHERE id = ?
                         """,
                         (
@@ -252,6 +292,10 @@ class Storage:
                             category,
                             int(snippet.favorite),
                             json.dumps(applications, ensure_ascii=False),
+                            snippet.kind.value,
+                            description,
+                            json.dumps(search_terms, ensure_ascii=False),
+                            priority,
                             snippet.id,
                         ),
                     )
@@ -392,13 +436,17 @@ class Storage:
         overwrite_conflicts: bool,
     ) -> tuple[int, int, int]:
         for snippet in snippets:
-            issues = validate_abbreviation(snippet.abbreviation)
+            issues = validate_snippet_trigger(snippet.abbreviation, snippet.kind)
             if issues:
                 raise ValueError(issues[0].message)
             category_issues = validate_category(snippet.category.strip())
             if category_issues:
                 raise ValueError(category_issues[0].message)
             normalize_applications(snippet.applications)
+            if validate_description(snippet.description.strip()):
+                raise ValueError("Invalid snippet description.")
+            normalize_search_terms(snippet.search_terms)
+            normalize_priority(snippet.priority)
 
         abbreviations = [snippet.abbreviation for snippet in snippets]
         if len(abbreviations) != len(set(abbreviations)):
@@ -428,7 +476,8 @@ class Storage:
                             SET expansion = ?, trigger_mode = ?, enabled = ?,
                                 created_at = ?, updated_at = ?, usage_count = ?,
                                 last_used_at = ?, category = ?, favorite = ?,
-                                applications = ?
+                                applications = ?, kind = ?, description = ?,
+                                search_terms = ?, priority = ?
                             WHERE abbreviation = ?
                             """,
                             values[1:] + (snippet.abbreviation,),
@@ -441,8 +490,9 @@ class Storage:
                     """
                     INSERT INTO snippets(
                         abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
-                        usage_count, last_used_at, category, favorite, applications
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        usage_count, last_used_at, category, favorite, applications,
+                        kind, description, search_terms, priority
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     self._import_values(snippet, now),
                 )
@@ -482,6 +532,13 @@ class Storage:
                 normalize_applications(snippet.applications),
                 ensure_ascii=False,
             ),
+            snippet.kind.value,
+            snippet.description.strip(),
+            json.dumps(
+                normalize_search_terms(snippet.search_terms),
+                ensure_ascii=False,
+            ),
+            normalize_priority(snippet.priority),
         )
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
@@ -518,6 +575,10 @@ class Storage:
             category=str(row["category"]),
             favorite=bool(row["favorite"]),
             applications=Storage._decode_applications(str(row["applications"])),
+            kind=SnippetKind(str(row["kind"])),
+            description=str(row["description"]),
+            search_terms=Storage._decode_search_terms(str(row["search_terms"])),
+            priority=int(row["priority"]),
         )
 
     @staticmethod
@@ -532,5 +593,20 @@ class Storage:
             return ()
         try:
             return normalize_applications(decoded)
+        except ValueError:
+            return ()
+
+    @staticmethod
+    def _decode_search_terms(value: str) -> tuple[str, ...]:
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(decoded, list) or not all(
+            isinstance(item, str) for item in decoded
+        ):
+            return ()
+        try:
+            return normalize_search_terms(decoded)
         except ValueError:
             return ()

@@ -7,13 +7,18 @@ from typing import Any
 
 from .models import (
     Snippet,
+    SnippetKind,
     TriggerMode,
     normalize_applications,
-    validate_abbreviation,
+    normalize_priority,
+    normalize_search_terms,
+    validate_description,
+    validate_snippet_trigger,
 )
 
 BACKUP_FORMAT = "quicktype-backup"
-BACKUP_VERSION = 1
+BACKUP_VERSION = 2
+SUPPORTED_BACKUP_VERSIONS = frozenset({1, 2})
 MAX_BACKUP_SIZE = 10 * 1024 * 1024
 
 
@@ -51,7 +56,7 @@ def import_backup(path: Path) -> list[Snippet]:
         raise BackupFormatError("Backup root must be a JSON object.")
     if document.get("format") != BACKUP_FORMAT:
         raise BackupFormatError("This is not a QuickType backup.")
-    if document.get("version") != BACKUP_VERSION:
+    if document.get("version") not in SUPPORTED_BACKUP_VERSIONS:
         raise BackupFormatError("Unsupported QuickType backup version.")
     raw_snippets = document.get("snippets")
     if not isinstance(raw_snippets, list):
@@ -83,6 +88,10 @@ def _snippet_to_dict(snippet: Snippet) -> dict[str, Any]:
         "category": snippet.category,
         "favorite": snippet.favorite,
         "applications": list(snippet.applications),
+        "kind": snippet.kind.value,
+        "description": snippet.description,
+        "search_terms": list(snippet.search_terms),
+        "priority": snippet.priority,
     }
 
 
@@ -97,8 +106,12 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
     category = value.get("category", "")
     favorite = value.get("favorite", False)
     applications = value.get("applications", [])
+    kind = value.get("kind", SnippetKind.LITERAL.value)
+    description = value.get("description", "")
+    search_terms = value.get("search_terms", [])
+    priority = value.get("priority", 0)
 
-    if not isinstance(abbreviation, str) or validate_abbreviation(abbreviation):
+    if not isinstance(abbreviation, str):
         raise BackupFormatError(f"Snippet #{index + 1} has an invalid abbreviation.")
     if not isinstance(expansion, str):
         raise BackupFormatError(f"Snippet #{index + 1} has invalid expansion text.")
@@ -135,6 +148,27 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         raise BackupFormatError(
             f"Snippet #{index + 1} has invalid applications."
         ) from error
+    if not isinstance(kind, str):
+        raise BackupFormatError(f"Snippet #{index + 1} has an invalid kind.")
+    try:
+        snippet_kind = SnippetKind(kind)
+    except ValueError as error:
+        raise BackupFormatError(f"Snippet #{index + 1} has an invalid kind.") from error
+    if validate_snippet_trigger(abbreviation, snippet_kind):
+        raise BackupFormatError(f"Snippet #{index + 1} has an invalid abbreviation.")
+    if not isinstance(description, str) or validate_description(description):
+        raise BackupFormatError(f"Snippet #{index + 1} has an invalid description.")
+    if not isinstance(search_terms, list) or not all(
+        isinstance(item, str) for item in search_terms
+    ):
+        raise BackupFormatError(f"Snippet #{index + 1} has invalid search terms.")
+    try:
+        normalized_search_terms = normalize_search_terms(search_terms)
+        normalized_priority = normalize_priority(priority)
+    except ValueError as error:
+        raise BackupFormatError(
+            f"Snippet #{index + 1} has invalid advanced settings."
+        ) from error
 
     return Snippet(
         id=None,
@@ -149,6 +183,10 @@ def _snippet_from_dict(value: Any, index: int) -> Snippet:
         category=category.strip(),
         favorite=favorite,
         applications=normalized_applications,
+        kind=snippet_kind,
+        description=description.strip(),
+        search_terms=normalized_search_terms,
+        priority=normalized_priority,
     )
 
 

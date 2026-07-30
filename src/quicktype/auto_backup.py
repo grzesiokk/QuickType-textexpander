@@ -97,6 +97,10 @@ class AutomaticBackupManager:
                 "category": snippet.category,
                 "favorite": snippet.favorite,
                 "applications": list(snippet.applications),
+                "kind": snippet.kind.value,
+                "description": snippet.description,
+                "search_terms": list(snippet.search_terms),
+                "priority": snippet.priority,
             }
             for snippet in snippets
         ]

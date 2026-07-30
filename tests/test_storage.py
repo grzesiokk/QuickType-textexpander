@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from quicktype.models import Snippet, TriggerMode
+from quicktype.models import Snippet, SnippetKind, TriggerMode
 from quicktype.storage import DuplicateAbbreviationError, Storage
 
 
@@ -308,4 +308,24 @@ def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None
         "SELECT value FROM metadata WHERE key = 'schema_version'"
     ).fetchone()[0]
     connection.close()
-    assert schema_version == "5"
+    assert schema_version == "6"
+
+
+def test_advanced_snippet_fields_are_persisted(storage: Storage) -> None:
+    saved = storage.save_snippet(
+        Snippet(
+            None,
+            r"order-(?P<number>\d+)",
+            "Order {{match:number}}",
+            TriggerMode.DELIMITER,
+            kind=SnippetKind.REGEX,
+            description="Order helper",
+            search_terms=("invoice", "order"),
+            priority=25,
+        )
+    )
+
+    assert saved.kind == SnippetKind.REGEX
+    assert saved.description == "Order helper"
+    assert saved.search_terms == ("invoice", "order")
+    assert saved.priority == 25
