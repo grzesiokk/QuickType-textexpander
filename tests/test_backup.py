@@ -1,18 +1,30 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from quicktype import backup as backup_module
 from quicktype.backup import (
     BackupFormatError,
     export_backup,
     import_backup,
+    import_backup_bundles,
     import_library_state,
 )
-from quicktype.models import Snippet, SnippetKind, TriggerMode
+from quicktype.models import (
+    Snippet,
+    SnippetAsset,
+    SnippetBundle,
+    SnippetContentFormat,
+    SnippetKind,
+    TriggerMode,
+)
 
 
 def test_backup_round_trip_preserves_snippet_data(tmp_path: Path) -> None:
@@ -110,6 +122,122 @@ def test_backup_v2_can_include_builtin_library_state(tmp_path: Path) -> None:
     export_backup(path, [], library_state=state)
 
     assert import_library_state(path) == state
+
+
+def test_backup_v3_package_round_trip_preserves_rich_assets(tmp_path: Path) -> None:
+    data = b"\x89PNG\r\n\x1a\nbackup-image"
+    asset_id = str(uuid.uuid4())
+    asset = SnippetAsset(
+        asset_id=asset_id,
+        mime_type="image/png",
+        data=data,
+        original_name="logo.png",
+        width=12,
+        height=8,
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    snippet = Snippet(
+        None,
+        ";rich",
+        "Logo [Image: logo]",
+        TriggerMode.DELIMITER,
+        content_format=SnippetContentFormat.RICH,
+        rich_html=f'<p>Logo<img src="quicktype-asset://{asset_id}"></p>',
+    )
+    path = tmp_path / "backup.qtbackup"
+
+    export_backup(path, [SnippetBundle(snippet, (asset,))])
+    imported = import_backup_bundles(path)
+
+    assert imported[0].snippet.content_format == SnippetContentFormat.RICH
+    assert imported[0].snippet.rich_html == snippet.rich_html
+    assert imported[0].assets == (asset,)
+
+
+def test_backup_v3_rejects_checksum_mismatch(tmp_path: Path) -> None:
+    data = b"\x89PNG\r\n\x1a\nchecksum"
+    asset_id = str(uuid.uuid4())
+    asset = SnippetAsset(
+        asset_id,
+        "image/png",
+        data,
+        "checksum.png",
+        2,
+        2,
+        hashlib.sha256(data).hexdigest(),
+    )
+    snippet = Snippet(
+        None,
+        "checksum",
+        "[Image: checksum]",
+        TriggerMode.IMMEDIATE,
+        content_format=SnippetContentFormat.RICH,
+        rich_html=f'<img src="quicktype-asset://{asset_id}">',
+    )
+    valid = tmp_path / "valid.qtbackup"
+    damaged = tmp_path / "damaged.qtbackup"
+    export_backup(valid, [SnippetBundle(snippet, (asset,))])
+    with zipfile.ZipFile(valid, "r") as source:
+        entries = {
+            info.filename: source.read(info.filename)
+            for info in source.infolist()
+        }
+    manifest = json.loads(entries["manifest.json"])
+    manifest["snippets"][0]["assets"][0]["sha256"] = "0" * 64
+    entries["manifest.json"] = json.dumps(manifest).encode("utf-8")
+    with zipfile.ZipFile(damaged, "w") as destination:
+        for name, content in entries.items():
+            destination.writestr(name, content)
+
+    with pytest.raises(BackupFormatError, match="checksum"):
+        import_backup_bundles(damaged)
+
+
+def test_backup_v3_rejects_zip_traversal(tmp_path: Path) -> None:
+    path = tmp_path / "traversal.qtbackup"
+    manifest = {
+        "format": "quicktype-backup",
+        "version": 3,
+        "snippets": [],
+    }
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("../outside.png", b"unsafe")
+
+    with pytest.raises(BackupFormatError, match="unsafe path"):
+        import_backup_bundles(path)
+
+
+def test_backup_v3_enforces_per_image_limit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(backup_module, "MAX_ASSET_SIZE", 4)
+    data = b"12345"
+    asset_id = str(uuid.uuid4())
+    asset = SnippetAsset(
+        asset_id,
+        "image/png",
+        data,
+        "large.png",
+        1,
+        1,
+        hashlib.sha256(data).hexdigest(),
+    )
+    snippet = Snippet(
+        None,
+        "large",
+        "[Image: large]",
+        TriggerMode.IMMEDIATE,
+        content_format=SnippetContentFormat.RICH,
+        rich_html=f'<img src="quicktype-asset://{asset_id}">',
+    )
+
+    with pytest.raises(BackupFormatError, match="10 MiB"):
+        export_backup(
+            tmp_path / "large.qtbackup",
+            [SnippetBundle(snippet, (asset,))],
+        )
 
 
 @pytest.mark.parametrize(

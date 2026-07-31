@@ -17,6 +17,22 @@ class SnippetKind(StrEnum):
     REGEX = "regex"
 
 
+class SnippetContentFormat(StrEnum):
+    PLAIN = "plain"
+    RICH = "rich"
+
+
+@dataclass(frozen=True, slots=True)
+class SnippetAsset:
+    asset_id: str
+    mime_type: str
+    data: bytes
+    original_name: str
+    width: int
+    height: int
+    sha256: str
+
+
 @dataclass(frozen=True, slots=True)
 class Snippet:
     id: int | None
@@ -37,6 +53,23 @@ class Snippet:
     priority: int = 0
     source_library: str = ""
     source_item_id: str = ""
+    content_format: SnippetContentFormat = SnippetContentFormat.PLAIN
+    rich_html: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SnippetBundle:
+    snippet: Snippet
+    assets: tuple[SnippetAsset, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedContent:
+    plain_text: str
+    html: str = ""
+    rtf: bytes = b""
+    cursor_from_end: int = 0
+    cursor_present: bool = False
 
 
 @dataclass(frozen=True, slots=True)

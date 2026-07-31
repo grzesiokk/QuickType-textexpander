@@ -21,7 +21,8 @@ def collect_data_summary(storage: Storage) -> DataSummary:
         sum(
             1
             for path in backup_directory.iterdir()
-            if path.is_file() and path.suffix.casefold() == ".json"
+            if path.is_file()
+            and path.suffix.casefold() in {".json", ".qtbackup"}
         )
         if backup_directory.exists()
         else 0
@@ -35,11 +36,11 @@ def collect_data_summary(storage: Storage) -> DataSummary:
 
 def create_manual_backup(storage: Storage) -> Path:
     destination = storage.path.parent / "Backups" / (
-        f"QuickType-manual-{datetime.now():%Y%m%d-%H%M%S-%f}.json"
+        f"QuickType-manual-{datetime.now():%Y%m%d-%H%M%S-%f}.qtbackup"
     )
     export_backup(
         destination,
-        storage.list_snippets(),
+        storage.list_snippet_bundles(),
         library_state=storage.export_library_state(),
     )
     return destination

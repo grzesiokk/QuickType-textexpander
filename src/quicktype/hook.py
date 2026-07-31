@@ -18,7 +18,7 @@ from .hotkeys import (
     normalize_quick_access_hotkey,
 )
 from .matcher import ExpansionAction, SnippetMatcher
-from .models import Snippet, snippet_applies_to_process
+from .models import Snippet, SnippetContentFormat, snippet_applies_to_process
 from .template_engine import TOKEN_RE, render_template
 from .windows_platform import PasswordFieldDetector, process_name_from_window, read_clipboard_text
 
@@ -53,6 +53,7 @@ VK_RIGHT = 0x27
 VK_DOWN = 0x28
 VK_DELETE = 0x2E
 VK_N = 0x4E
+VK_V = 0x56
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 VK_RMENU = 0xA5
@@ -220,6 +221,13 @@ class TextInsertionTask:
     require_active: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class RichPasteTask:
+    expansion_task: ExpansionTask
+    cursor_from_end: int = 0
+    cursor_present: bool = False
+
+
 class KeyboardHookEngine:
     def __init__(
         self,
@@ -230,6 +238,7 @@ class KeyboardHookEngine:
         on_quick_access: Callable[[int], None] | None = None,
         on_clipboard_capture: Callable[[], None] | None = None,
         on_form_request: Callable[[ExpansionAction, int], None] | None = None,
+        on_rich_request: Callable[[ExpansionTask], None] | None = None,
         quick_access_hotkey: str = DEFAULT_QUICK_ACCESS_HOTKEY,
         clipboard_capture_hotkey: str = DEFAULT_CLIPBOARD_CAPTURE_HOTKEY,
         excluded_processes: set[str] | None = None,
@@ -241,6 +250,7 @@ class KeyboardHookEngine:
         self.on_quick_access = on_quick_access
         self.on_clipboard_capture = on_clipboard_capture
         self.on_form_request = on_form_request
+        self.on_rich_request = on_rich_request
         self._quick_access_hotkey = normalize_quick_access_hotkey(
             quick_access_hotkey
         )
@@ -251,7 +261,9 @@ class KeyboardHookEngine:
         )
         self._active = True
         self._active_lock = threading.Lock()
-        self._tasks: queue.Queue[ExpansionTask | TextInsertionTask | None] = queue.Queue()
+        self._tasks: queue.Queue[
+            ExpansionTask | RichPasteTask | TextInsertionTask | None
+        ] = queue.Queue()
         self._hook_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._hook_thread_id = 0
@@ -503,11 +515,17 @@ class KeyboardHookEngine:
                 try:
                     if isinstance(task, TextInsertionTask):
                         self._perform_text_insertion(task)
+                    elif isinstance(task, RichPasteTask):
+                        self._perform_rich_paste(task)
                     else:
                         self._perform_expansion(task)
                 except Exception as error:
                     if isinstance(task, ExpansionTask):
                         self._restore_suppressed_input(task.action)
+                    elif isinstance(task, RichPasteTask):
+                        self._restore_suppressed_input(
+                            task.expansion_task.action
+                        )
                     if self.on_error:
                         self.on_error(str(error))
         finally:
@@ -520,6 +538,12 @@ class KeyboardHookEngine:
             or self._password_detector.is_password_field()
         ):
             self._restore_suppressed_input(task.action)
+            return
+
+        if task.action.snippet.content_format == SnippetContentFormat.RICH:
+            if self.on_rich_request is None:
+                raise RuntimeError("Rich text expansion is unavailable.")
+            self.on_rich_request(task)
             return
 
         rendered = render_template(
@@ -552,6 +576,36 @@ class KeyboardHookEngine:
             raise RuntimeError("SendInput did not accept all keyboard events")
         if self.on_expansion:
             self.on_expansion(task.action.snippet)
+
+    def _perform_rich_paste(self, task: RichPasteTask) -> None:
+        expansion = task.expansion_task
+        if (
+            (expansion.require_active and not self.active)
+            or int(user32.GetForegroundWindow() or 0) != expansion.foreground_window
+            or self._password_detector.is_password_field()
+        ):
+            self._restore_suppressed_input(expansion.action)
+            return
+        inputs: list[INPUT] = []
+        for _ in range(expansion.action.delete_count):
+            inputs.extend(_virtual_key_inputs(VK_BACK))
+        inputs.extend(_paste_inputs())
+        if expansion.action.success_suffix_text:
+            inputs.extend(_text_inputs(expansion.action.success_suffix_text))
+        if expansion.action.success_suffix_vk is not None:
+            inputs.extend(_virtual_key_inputs(expansion.action.success_suffix_vk))
+        suffix_distance = len(expansion.action.success_suffix_text)
+        if expansion.action.success_suffix_vk is not None:
+            suffix_distance += 1
+        for _ in range(
+            task.cursor_from_end
+            + (suffix_distance if task.cursor_present else 0)
+        ):
+            inputs.extend(_virtual_key_inputs(VK_LEFT))
+        if not _send_inputs(inputs):
+            raise RuntimeError("SendInput did not accept the rich paste sequence")
+        if self.on_expansion:
+            self.on_expansion(expansion.action.snippet)
 
     def _perform_text_insertion(self, task: TextInsertionTask) -> None:
         if (
@@ -672,6 +726,21 @@ class KeyboardHookEngine:
             )
         )
 
+    def paste_rich(
+        self,
+        task: ExpansionTask,
+        *,
+        cursor_from_end: int,
+        cursor_present: bool,
+    ) -> None:
+        self._tasks.put_nowait(
+            RichPasteTask(
+                expansion_task=task,
+                cursor_from_end=cursor_from_end,
+                cursor_present=cursor_present,
+            )
+        )
+
     def insert_text(self, text: str, foreground_window: int) -> bool:
         if not text or not foreground_window or self._is_own_window(foreground_window):
             return False
@@ -750,6 +819,15 @@ def _virtual_key_inputs(virtual_key: int) -> list[INPUT]:
     return [
         _keyboard_input(virtual_key, 0, 0),
         _keyboard_input(virtual_key, 0, KEYEVENTF_KEYUP),
+    ]
+
+
+def _paste_inputs() -> list[INPUT]:
+    return [
+        _keyboard_input(VK_CONTROL, 0, 0),
+        _keyboard_input(VK_V, 0, 0),
+        _keyboard_input(VK_V, 0, KEYEVENTF_KEYUP),
+        _keyboard_input(VK_CONTROL, 0, KEYEVENTF_KEYUP),
     ]
 
 

@@ -5,6 +5,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QLocale, QTimer
 from PySide6.QtGui import QIcon
@@ -16,16 +17,18 @@ from .auto_backup import (
 )
 from .builtin_libraries import BuiltinCatalog
 from .clipboard_history import ClipboardHistory
+from .clipboard_paste import RichClipboardCoordinator
 from .constants import APP_NAME, APP_VERSION, database_path, resource_path
-from .hook import KeyboardHookEngine
+from .hook import ExpansionTask, KeyboardHookEngine
 from .hotkeys import (
     normalize_clipboard_capture_hotkey,
     normalize_quick_access_hotkey,
 )
 from .i18n import Translator
 from .matcher import ExpansionAction
-from .models import Snippet
+from .models import Snippet, SnippetBundle, snippet_applies_to_process
 from .recovery import latest_recovery_backup, recover_database
+from .rich_content import RichContentError, render_bundle
 from .single_instance import SingleInstance
 from .storage import Storage
 from .template_engine import collect_form_fields
@@ -41,6 +44,7 @@ from .ui import (
 from .windows_platform import (
     current_foreground_window,
     is_autostart_enabled,
+    process_name_from_window,
     repair_autostart_if_enabled,
     restore_foreground_window,
     set_autostart,
@@ -48,7 +52,13 @@ from .windows_platform import (
 
 
 class QuickTypeController:
-    def __init__(self, application: QApplication, *, start_minimized: bool) -> None:
+    def __init__(
+        self,
+        application: QApplication,
+        *,
+        start_minimized: bool,
+        single_instance: SingleInstance | None = None,
+    ) -> None:
         self.application = application
         self.storage = Storage(database_path())
         self.storage.initialize()
@@ -77,6 +87,9 @@ class QuickTypeController:
             self.storage.get_setting("clipboard_history_enabled", "0") == "1"
         )
         self.clipboard_history = ClipboardHistory()
+        self.clipboard_coordinator = RichClipboardCoordinator(
+            application.clipboard()
+        )
         application.clipboard().dataChanged.connect(self._on_clipboard_changed)
         apply_application_style(self.application, theme)
         self.backups = AutomaticBackupManager(
@@ -93,6 +106,7 @@ class QuickTypeController:
             on_quick_access=self.signals.quick_access.emit,
             on_clipboard_capture=self.signals.clipboard_capture.emit,
             on_form_request=self.signals.form_requested.emit,
+            on_rich_request=self.signals.rich_requested.emit,
             quick_access_hotkey=quick_access_hotkey,
             clipboard_capture_hotkey=clipboard_capture_hotkey,
             excluded_processes=excluded_processes,
@@ -128,8 +142,11 @@ class QuickTypeController:
             on_quit=self.quit,
             autostart=autostart,
         )
-        self.instance = SingleInstance(self.window.show_and_activate)
-        self.instance.listen()
+        self.instance = single_instance or SingleInstance(
+            self.window.show_and_activate
+        )
+        if single_instance is None and not self.instance.listen():
+            raise RuntimeError("Another QuickType instance is already running.")
 
         self.window.language_change_requested.connect(self.set_language)
         self.window.active_change_requested.connect(self.set_active)
@@ -164,6 +181,7 @@ class QuickTypeController:
             self.new_snippet_from_clipboard
         )
         self.signals.form_requested.connect(self._on_form_requested)
+        self.signals.rich_requested.connect(self._on_rich_requested)
         self.quick_access.snippet_chosen.connect(self._quick_access_chosen)
         self.quick_access.clipboard_history_clear_requested.connect(
             self.clear_clipboard_history
@@ -313,11 +331,71 @@ class QuickTypeController:
         self.quick_access.refresh_history()
 
     def _on_clipboard_changed(self) -> None:
+        if self.clipboard_coordinator.internal_change:
+            return
         if self.storage.get_setting("clipboard_history_enabled", "0") != "1":
             return
         text = self.application.clipboard().text()
         if self.clipboard_history.add(text):
             self.quick_access.refresh_history()
+
+    def _on_rich_requested(self, value: object) -> None:
+        if not isinstance(value, ExpansionTask):
+            return
+        snippet_id = value.action.snippet.id
+        if not isinstance(snippet_id, int):
+            self.engine.cancel_action(value.action)
+            self._on_engine_error("Rich built-in snippets are unavailable.")
+            return
+        bundle = self.storage.get_snippet_bundle(snippet_id)
+        if bundle is None:
+            self.engine.cancel_action(value.action)
+            self._on_engine_error("The rich snippet could not be loaded.")
+            return
+        snapshot = self.clipboard_coordinator.snapshot()
+        try:
+            rendered = render_bundle(
+                bundle,
+                clipboard_text=snapshot.text,
+                values=dict(value.values),
+                match_groups=dict(value.action.match_groups),
+                snippet_provider=self._bundle_provider(
+                    value.foreground_window
+                ),
+            )
+        except (RichContentError, ValueError) as error:
+            self.engine.cancel_action(value.action)
+            self._on_engine_error(str(error))
+            return
+        self.clipboard_coordinator.stage_for_paste(
+            rendered,
+            snapshot,
+            lambda: self.engine.paste_rich(
+                value,
+                cursor_from_end=rendered.cursor_from_end,
+                cursor_present=rendered.cursor_present,
+            ),
+        )
+
+    def _bundle_provider(
+        self,
+        foreground_window: int,
+    ) -> Callable[[str], SnippetBundle | None]:
+        process_name = process_name_from_window(foreground_window).casefold()
+        available = {
+            bundle.snippet.abbreviation: bundle
+            for bundle in self.storage.list_snippet_bundles()
+            if bundle.snippet.enabled
+            and snippet_applies_to_process(bundle.snippet, process_name)
+        }
+        for snippet in self.catalog.runtime_snippets():
+            if (
+                snippet.enabled
+                and snippet_applies_to_process(snippet, process_name)
+                and snippet.abbreviation not in available
+            ):
+                available[snippet.abbreviation] = SnippetBundle(snippet)
+        return available.get
 
     def clear_clipboard_history(self) -> None:
         self.clipboard_history.clear()
@@ -468,6 +546,12 @@ def run(argv: list[str] | None = None) -> int:
 
     if SingleInstance.notify_existing():
         return 0
+    activation_target: list[Callable[[], None]] = []
+    single_instance = SingleInstance(
+        lambda: activation_target[0]() if activation_target else None
+    )
+    if not single_instance.listen():
+        return 0
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, APP_NAME, "Windows system tray is unavailable.")
         return 1
@@ -481,7 +565,12 @@ def run(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        controller = QuickTypeController(application, start_minimized=options.minimized)
+        controller = QuickTypeController(
+            application,
+            start_minimized=options.minimized,
+            single_instance=single_instance,
+        )
+        activation_target.append(controller.window.show_and_activate)
     except Exception as error:
         translator = Translator("pl" if QLocale.system().language() == QLocale.Language.Polish else "en")
         QMessageBox.critical(

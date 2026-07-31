@@ -7,11 +7,11 @@ from datetime import datetime
 from pathlib import Path
 
 from .backup import export_backup
-from .models import Snippet
+from .models import Snippet, SnippetBundle
 from .storage import Storage
 
 AUTO_BACKUP_PATTERN = re.compile(
-    r"QuickType-auto-\d{8}-\d{6}-\d{6}\.json"
+    r"QuickType-auto-\d{8}-\d{6}-\d{6}\.(?:json|qtbackup)"
 )
 DEFAULT_BACKUP_RETENTION = 20
 MIN_BACKUP_RETENTION = 1
@@ -61,19 +61,20 @@ class AutomaticBackupManager:
         self._last_fingerprint: str | None = None
 
     def create_if_changed(self, snippets: list[Snippet] | None = None) -> Path | None:
-        current = snippets if snippets is not None else self.storage.list_snippets()
+        bundles = self.storage.list_snippet_bundles()
+        _ = snippets
         library_state = self.storage.export_library_state()
-        fingerprint = self._fingerprint(current, library_state)
+        fingerprint = self._fingerprint(bundles, library_state)
         if fingerprint == self._last_fingerprint:
             return None
 
         now = datetime.now()
         destination = self.directory / (
-            f"QuickType-auto-{now:%Y%m%d-%H%M%S-%f}.json"
+            f"QuickType-auto-{now:%Y%m%d-%H%M%S-%f}.qtbackup"
         )
         export_backup(
             destination,
-            current,
+            bundles,
             library_state=library_state,
         )
         self._last_fingerprint = fingerprint
@@ -93,11 +94,10 @@ class AutomaticBackupManager:
 
     @staticmethod
     def _fingerprint(
-        snippets: list[Snippet],
+        bundles: list[SnippetBundle],
         library_state: dict[str, object] | None = None,
     ) -> str:
-        values: object = {
-            "snippets": [
+        snippet_values: list[dict[str, object]] = [
             {
                 "abbreviation": snippet.abbreviation,
                 "expansion": snippet.expansion,
@@ -110,9 +110,24 @@ class AutomaticBackupManager:
                 "description": snippet.description,
                 "search_terms": list(snippet.search_terms),
                 "priority": snippet.priority,
+                "content_format": snippet.content_format.value,
+                "rich_html": snippet.rich_html,
+                "assets": [
+                    {
+                        "asset_id": asset.asset_id,
+                        "sha256": asset.sha256,
+                        "original_name": asset.original_name,
+                        "width": asset.width,
+                        "height": asset.height,
+                    }
+                    for asset in bundle.assets
+                ],
             }
-            for snippet in snippets
-            ],
+            for bundle in bundles
+            for snippet in (bundle.snippet,)
+        ]
+        values: object = {
+            "snippets": snippet_values,
             "library_state": library_state or {},
         }
         encoded = json.dumps(
