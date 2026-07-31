@@ -12,7 +12,7 @@ Run the same quality gates used by CI:
 
 ```powershell
 .\.venv\Scripts\ruff.exe check src tests scripts
-.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/rich_content.py src/quicktype/clipboard_paste.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
 .\.venv\Scripts\python.exe -m pytest --cov=quicktype --cov-report=term --cov-fail-under=72
 .\.venv\Scripts\pip-audit.exe --local --skip-editable --progress-spinner off
 ```
@@ -49,7 +49,7 @@ Before publishing a release:
 8. Import a backup containing both new and conflicting abbreviations. Verify the
    preview counts and side-by-side current/imported expansions. Test merge,
    update-conflicts, and full replace modes; confirm unrelated local snippets
-   survive update mode and a `QuickType-before-import-*.json` safety copy is
+   survive update mode and a `QuickType-before-import-*.qtbackup` safety copy is
    created each time.
 9. Sort each list column, especially usage values such as 2 and 10. Combine
    search and category filters, verify the visible count, then export only the
@@ -78,7 +78,7 @@ Before publishing a release:
    the changed-field names and both expansion columns, and copy the report to
    the clipboard. Refresh the catalog, open its folder, and delete a disposable
    backup after confirmation. Restore a safety copy and verify the previous
-   state is saved as a new `QuickType-before-restore-*.json`.
+   state is saved as a new `QuickType-before-restore-*.qtbackup`.
 17. Confirm the default retention of 20 automatic backups. Change retention to
    3 and 30 and confirm pruning and persistence.
 18. Confirm that expansion does not run in QuickType's editor or a recognized
@@ -89,7 +89,7 @@ Before publishing a release:
     columns, and panel split, restart, and verify the restored layout. Complete
     the main workflow using only the keyboard.
 21. On disposable data, corrupt a copy of `quicktype.sqlite3`, start QuickType,
-    accept recovery, and verify that the newest valid JSON backup is restored
+    accept recovery, and verify that the newest valid backup is restored
     while the damaged database is preserved under a `*-corrupt-*` name.
 22. In Libraries, verify every catalog is disabled on a fresh database. Enable
     both autocorrect profiles and test lower case, first-letter capitalization,
@@ -124,3 +124,30 @@ Before publishing a release:
     filters for form values, clipboard text, and regex groups. Verify Unicode,
     empty/missing fallbacks, escaped pipes, preview output, and malformed-token
     validation in both Polish and English.
+33. Create a Plain snippet and verify Smart Element chips for date, time,
+    clipboard, cursor, input, choice, checkbox, variable, calculation, nested
+    snippet, regex group, and transforms. Insert each from the palette, edit
+    with Enter or double click, remove atomically with Backspace/Delete, and
+    verify the `{{...}}` round trip.
+34. Convert Plain to Rich and verify the Visual, HTML, and read-only Plain
+    fallback tabs remain synchronized. Apply valid HTML, reject invalid or
+    unsafe HTML, then convert back to Plain after confirmation.
+35. In the Visual editor, verify undo/redo, bold, italic, underline, strike,
+    font family and size, text/background colors, alignment, lists, links, and
+    keyboard-only access in Polish and English across all three themes.
+36. Add PNG, JPEG, GIF/WebP, and clipboard images; test drag-and-drop, width
+    changes preserving aspect ratio, alternative text, optional link, and
+    deletion. Move the source files and confirm saved images still render.
+37. Export Rich snippets to `.qtbackup`, import them into a fresh library, and
+    verify formatting and images. Also import JSON v1/v2 as Plain. Corrupt an
+    asset checksum and confirm import is rejected without changing the library.
+38. Verify Rich expansion publishes formatting, a link, an inline image, and a
+    Smart Element in Word, Outlook desktop, Gmail, and Outlook Web using current
+    Edge and Chrome. Notepad and ordinary HTML text fields must receive the
+    readable Plain fallback.
+39. Verify `{{clipboard}}` reads the pre-expansion value, internal clipboard
+    writes do not enter QuickType history, the original clipboard returns after
+    paste, and an intervening external clipboard change prevents restoration.
+    Repeat cancellation/error recovery, excluded application, password field,
+    active-window change, nested Rich/Plain snippets, cycles, and cursor
+    placement. Confirm validation rejects an image after `{{cursor}}`.

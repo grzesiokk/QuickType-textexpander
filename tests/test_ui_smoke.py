@@ -6,8 +6,8 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QEvent, QItemSelectionModel, QMimeData, Qt
+from PySide6.QtGui import QDesktopServices, QImage, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -25,7 +25,7 @@ from quicktype.builtin_libraries import (
 )
 from quicktype.i18n import Translator
 from quicktype.importing import ImportMode, analyze_import
-from quicktype.models import Snippet, TriggerMode
+from quicktype.models import Snippet, SnippetContentFormat, TriggerMode
 from quicktype.recovery import RestoreChangeKind
 from quicktype.storage import Storage
 from quicktype.ui import (
@@ -37,6 +37,7 @@ from quicktype.ui import (
     MainWindow,
     QuickAccessDialog,
     SettingsDialog,
+    SmartPlainTextEdit,
     StatisticsDialog,
     TemplateAssistantDialog,
     TrayController,
@@ -745,10 +746,10 @@ def test_data_maintenance_dialog_creates_backup_and_checks_database(
     dialog = DataMaintenanceDialog(storage, Translator("en"))
 
     assert "Snippets: 1" in dialog.summary_label.text()
-    assert "JSON backups: 0" in dialog.summary_label.text()
+    assert "backups: 0" in dialog.summary_label.text()
     dialog.create_backup()
     assert "Created backup" in dialog.result_label.text()
-    assert "JSON backups: 1" in dialog.summary_label.text()
+    assert "backups: 1" in dialog.summary_label.text()
     dialog.check_database()
     assert dialog.result_label.text() == "The database integrity check passed."
     dialog.copy_diagnostics_button.click()
@@ -851,6 +852,98 @@ def test_new_snippet_from_clipboard_preserves_multiline_unicode(
     assert window.expansion_edit.toPlainText() == clipboard_text
     assert window.status_message.text() == "The clipboard does not contain text."
 
+    window.deleteLater()
+    application.processEvents()
+
+
+def test_rich_editor_saves_visual_html_fallback_and_image(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+    window.new_snippet()
+    window.abbreviation_edit.setText(";rich")
+    window.content_format_combo.setCurrentIndex(
+        window.content_format_combo.findData(SnippetContentFormat.RICH.value)
+    )
+    window.rich_visual_edit.setHtml("<p><b>Hello</b> {{clipboard}}</p>")
+    image = QImage(8, 4, QImage.Format.Format_ARGB32)
+    image.fill(0xFF336699)
+    window._insert_image_object(image, "logo.png")
+
+    assert window.save_current()
+    bundle = storage.list_snippet_bundles()[0]
+    assert bundle.snippet.content_format == SnippetContentFormat.RICH
+    assert "Hello {{clipboard}}" in bundle.snippet.expansion
+    assert "<span" in bundle.snippet.rich_html
+    assert "quicktype-asset://" in bundle.snippet.rich_html
+    assert len(bundle.assets) == 1
+    assert window.fallback_edit.isReadOnly()
+    _ = application
+
+
+def test_smart_element_enter_opens_prefilled_properties() -> None:
+    application = QApplication.instance() or QApplication([])
+    editor = SmartPlainTextEdit()
+    editor.setPlainText(r"Before {{default:var:name|Brak\|danych}} after")
+    cursor = editor.textCursor()
+    cursor.setPosition(editor.toPlainText().index("var:name"))
+    editor.setTextCursor(cursor)
+    activated: list[tuple[str, int, int]] = []
+    editor.smart_element_activated.connect(
+        lambda token, start, end: activated.append((token, start, end))
+    )
+
+    editor.keyPressEvent(
+        QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_Return,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+    dialog = TemplateAssistantDialog(
+        Translator("en"),
+        existing_token=activated[0][0],
+    )
+
+    assert len(activated) == 1
+    assert dialog.type_combo.currentData() == "transform"
+    assert dialog.transform_combo.currentData() == "default"
+    assert dialog.identifier_edit.text() == "var:name"
+    assert dialog.values_edit.text() == "Brak|danych"
+    assert dialog.token == r"{{default:var:name|Brak\|danych}}"
+    dialog.deleteLater()
+    editor.deleteLater()
+    application.processEvents()
+
+
+def test_new_snippet_from_rich_clipboard_uses_visual_editor(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    storage = Storage(tmp_path / "quicktype.sqlite3")
+    storage.initialize()
+    window = MainWindow(
+        storage,
+        Translator("en"),
+        engine_active=True,
+        autostart=False,
+    )
+    mime = QMimeData()
+    mime.setText("Hello")
+    mime.setHtml('<p><b>Hello</b><script>alert(1)</script></p>')
+    QApplication.clipboard().setMimeData(mime)
+
+    window.new_snippet_from_clipboard()
+
+    assert window._content_format() == SnippetContentFormat.RICH
+    assert window.content_stack.currentIndex() == 1
+    assert "script" not in window.html_edit.toPlainText()
+    assert "Hello" in window.fallback_edit.toPlainText()
+    QApplication.clipboard().clear()
     window.deleteLater()
     application.processEvents()
 

@@ -54,6 +54,16 @@ All phases planned for the local Windows 11 edition are complete.
   `clip:` / `schowek:` picker scopes and guarded direct insertion.
 - **Template transforms:** Unicode `upper`, `lower`, `title`, `trim`, and
   `default` filters for form values, clipboard text, and regex groups.
+- **Rich content:** Plain/Visual/HTML editing, sanitized formatting, links,
+  lists, embedded local images, and generated plain-text fallback.
+- **Visual Smart Elements:** atomic chips for all existing template markers,
+  palette insertion, keyboard removal, property editing, and portable
+  `{{...}}` HTML-source representation.
+- **Rich insertion:** coordinated RTF, HTML, and plain-text clipboard payloads,
+  protected clipboard restoration, cursor positioning, and nested rich
+  snippets.
+- **Portable v3 backups:** `.qtbackup` packages with a manifest, deduplicated
+  image assets, checksums, archive safety limits, and v1/v2 JSON import.
 - **Clipboard capture:** create an unsaved multiline Unicode snippet directly
   from the toolbar, `Ctrl+Shift+N`, or the system-tray menu.
 - **Global capture shortcut:** configurable Windows-wide clipboard capture that
@@ -76,13 +86,12 @@ All phases planned for the local Windows 11 edition are complete.
 
 ## Intentionally outside this edition
 
-Cloud synchronization, shared team libraries, images, arbitrary scripts,
-AI features, and macOS support are not planned for this private offline
-edition. Keeping these features out preserves the application's local-only
-privacy and compact scope.
+Cloud synchronization, shared team libraries, remote images, tables, arbitrary
+scripts, AI features, and macOS support are not planned for this private
+offline edition. Keeping these features out preserves the application's
+local-only privacy and compact scope.
 
 ## Next edition
 
-Contextual snippet profiles for switching between task-specific libraries are
-deferred to QuickType 2.2. They are intentionally separate from the session
-clipboard history and do not change the 2.1 data format.
+Contextual snippet profiles for switching between task-specific libraries
+remain deferred beyond QuickType 3.0.

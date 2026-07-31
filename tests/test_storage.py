@@ -1,10 +1,20 @@
+import hashlib
 import sqlite3
+import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from quicktype.models import Snippet, SnippetKind, TriggerMode
+from quicktype.models import (
+    Snippet,
+    SnippetAsset,
+    SnippetBundle,
+    SnippetContentFormat,
+    SnippetKind,
+    TriggerMode,
+)
 from quicktype.storage import DuplicateAbbreviationError, Storage
 
 
@@ -47,6 +57,125 @@ def test_duplicate_abbreviation_is_rejected(storage: Storage) -> None:
     storage.save_snippet(Snippet(None, "sig", "One", TriggerMode.DELIMITER))
     with pytest.raises(DuplicateAbbreviationError):
         storage.save_snippet(Snippet(None, "sig", "Two", TriggerMode.IMMEDIATE))
+
+
+def test_rich_snippet_bundle_round_trip_and_asset_cascade(storage: Storage) -> None:
+    data = b"\x89PNG\r\n\x1a\nrich-image"
+    asset_id = str(uuid.uuid4())
+    asset = SnippetAsset(
+        asset_id=asset_id,
+        mime_type="image/png",
+        data=data,
+        original_name="logo.png",
+        width=32,
+        height=16,
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    snippet = Snippet(
+        None,
+        ";rich",
+        "Hello [Image: logo]",
+        TriggerMode.DELIMITER,
+        content_format=SnippetContentFormat.RICH,
+        rich_html=f'<p><b>Hello</b><img src="quicktype-asset://{asset_id}"></p>',
+    )
+
+    saved = storage.save_snippet_bundle(SnippetBundle(snippet, (asset,)))
+    assert saved.snippet.content_format == SnippetContentFormat.RICH
+    assert saved.assets == (asset,)
+    assert storage.list_snippets()[0].rich_html == snippet.rich_html
+
+    storage.delete_snippet(int(saved.snippet.id))
+    with sqlite3.connect(storage.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM snippet_assets").fetchone()[0] == 0
+
+
+def test_rich_bundle_rejects_missing_or_unreferenced_assets(storage: Storage) -> None:
+    snippet = Snippet(
+        None,
+        ";rich",
+        "Hello",
+        TriggerMode.DELIMITER,
+        content_format=SnippetContentFormat.RICH,
+        rich_html='<p><img src="quicktype-asset://11111111-1111-1111-1111-111111111111"></p>',
+    )
+    with pytest.raises(ValueError, match="inconsistent"):
+        storage.save_snippet_bundle(SnippetBundle(snippet))
+
+
+def test_rich_asset_update_rolls_back_as_one_transaction(storage: Storage) -> None:
+    first_data = b"\x89PNG\r\n\x1a\nfirst"
+    shared_id = str(uuid.uuid4())
+    first_asset = SnippetAsset(
+        shared_id,
+        "image/png",
+        first_data,
+        "first.png",
+        2,
+        2,
+        hashlib.sha256(first_data).hexdigest(),
+    )
+    storage.save_snippet_bundle(
+        SnippetBundle(
+            Snippet(
+                None,
+                "first",
+                "[Image: first]",
+                TriggerMode.IMMEDIATE,
+                content_format=SnippetContentFormat.RICH,
+                rich_html=f'<img src="quicktype-asset://{shared_id}">',
+            ),
+            (first_asset,),
+        )
+    )
+    second_data = b"\x89PNG\r\n\x1a\nsecond"
+    second_id = str(uuid.uuid4())
+    second_asset = SnippetAsset(
+        second_id,
+        "image/png",
+        second_data,
+        "second.png",
+        3,
+        3,
+        hashlib.sha256(second_data).hexdigest(),
+    )
+    original = storage.save_snippet_bundle(
+        SnippetBundle(
+            Snippet(
+                None,
+                "second",
+                "[Image: second]",
+                TriggerMode.IMMEDIATE,
+                content_format=SnippetContentFormat.RICH,
+                rich_html=f'<img src="quicktype-asset://{second_id}">',
+            ),
+            (second_asset,),
+        )
+    )
+    conflicting_asset = SnippetAsset(
+        shared_id,
+        "image/png",
+        second_data,
+        "replacement.png",
+        3,
+        3,
+        hashlib.sha256(second_data).hexdigest(),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        storage.save_snippet_bundle(
+            SnippetBundle(
+                replace(
+                    original.snippet,
+                    expansion="Changed",
+                    rich_html=f'<img src="quicktype-asset://{shared_id}">',
+                ),
+                (conflicting_asset,),
+            )
+        )
+
+    restored = storage.get_snippet_bundle(int(original.snippet.id))
+    assert restored == original
 
 
 def test_settings_are_upserted(storage: Storage) -> None:
@@ -308,7 +437,76 @@ def test_v1_database_is_migrated_without_losing_snippets(tmp_path: Path) -> None
         "SELECT value FROM metadata WHERE key = 'schema_version'"
     ).fetchone()[0]
     connection.close()
-    assert schema_version == "7"
+    assert schema_version == "8"
+    assert snippet.content_format.value == "plain"
+    migration_copies = list(
+        (path.parent / "Backups").glob(
+            "QuickType-before-v3-migration-*.sqlite3"
+        )
+    )
+    assert len(migration_copies) == 1
+
+
+def test_schema_7_migrates_to_8_as_plain_with_pre_migration_copy(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "schema-7.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE snippets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                abbreviation TEXT NOT NULL UNIQUE COLLATE BINARY,
+                expansion TEXT NOT NULL,
+                trigger_mode TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                usage_count INTEGER NOT NULL DEFAULT 0,
+                last_used_at TEXT,
+                category TEXT NOT NULL DEFAULT '',
+                favorite INTEGER NOT NULL DEFAULT 0,
+                applications TEXT NOT NULL DEFAULT '[]',
+                kind TEXT NOT NULL DEFAULT 'literal',
+                description TEXT NOT NULL DEFAULT '',
+                search_terms TEXT NOT NULL DEFAULT '[]',
+                priority INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO metadata VALUES('schema_version', '7');
+            INSERT INTO snippets(
+                abbreviation, expansion, trigger_mode, enabled,
+                created_at, updated_at
+            ) VALUES(
+                'legacy', 'Unchanged {{date}}', 'delimiter', 1,
+                '2026-01-01T10:00:00', '2026-01-01T10:00:00'
+            );
+            """
+        )
+
+    storage = Storage(path)
+    storage.initialize()
+    storage.initialize()
+
+    snippet = storage.list_snippets()[0]
+    assert snippet.expansion == "Unchanged {{date}}"
+    assert snippet.content_format == SnippetContentFormat.PLAIN
+    assert snippet.rich_html == ""
+    copies = list(
+        (path.parent / "Backups").glob(
+            "QuickType-before-v3-migration-*.sqlite3"
+        )
+    )
+    assert len(copies) == 1
+    with sqlite3.connect(copies[0]) as backup:
+        assert backup.execute(
+            "SELECT value FROM metadata WHERE key = 'schema_version'"
+        ).fetchone() == ("7",)
+        columns = {
+            row[1] for row in backup.execute("PRAGMA table_info(snippets)")
+        }
+    assert "content_format" not in columns
 
 
 def test_v5_database_migrates_to_advanced_schema_without_data_loss(
@@ -375,7 +573,7 @@ def test_v5_database_migrates_to_advanced_schema_without_data_loss(
         """
     ).fetchone()
     connection.close()
-    assert schema_version == "7"
+    assert schema_version == "8"
     assert builtin_table == ("builtin_library_settings",)
 
 

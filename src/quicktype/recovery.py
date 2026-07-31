@@ -5,9 +5,9 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from .backup import export_backup, import_backup, import_library_state
+from .backup import export_backup, import_backup_bundles, import_library_state
 from .backup_catalog import list_backup_entries
-from .models import Snippet
+from .models import Snippet, SnippetBundle
 from .storage import Storage
 
 
@@ -47,30 +47,32 @@ class DatabaseRecoveryResult:
 
 def analyze_restore(storage: Storage, source: Path) -> RestoreAnalysis:
     path = Path(source)
-    incoming = import_backup(path)
-    current = storage.list_snippets()
+    incoming = import_backup_bundles(path)
+    current = storage.list_snippet_bundles()
     incoming_by_abbreviation = {
-        snippet.abbreviation: snippet for snippet in incoming
+        bundle.snippet.abbreviation: bundle for bundle in incoming
     }
     current_by_abbreviation = {
-        snippet.abbreviation: snippet for snippet in current
+        bundle.snippet.abbreviation: bundle for bundle in current
     }
     incoming_names = set(incoming_by_abbreviation)
     current_names = set(current_by_abbreviation)
     changes: list[RestoreChange] = []
     for name in sorted(incoming_names | current_names, key=str.casefold):
-        current_snippet = current_by_abbreviation.get(name)
-        incoming_snippet = incoming_by_abbreviation.get(name)
-        if current_snippet is None:
+        current_bundle = current_by_abbreviation.get(name)
+        incoming_bundle = incoming_by_abbreviation.get(name)
+        current_snippet = current_bundle.snippet if current_bundle else None
+        incoming_snippet = incoming_bundle.snippet if incoming_bundle else None
+        if current_bundle is None:
             kind = RestoreChangeKind.ADDED
             changed_fields: tuple[str, ...] = ()
-        elif incoming_snippet is None:
+        elif incoming_bundle is None:
             kind = RestoreChangeKind.REMOVED
             changed_fields = ()
         else:
             changed_fields = _changed_fields(
-                current_snippet,
-                incoming_snippet,
+                current_bundle,
+                incoming_bundle,
             )
             kind = (
                 RestoreChangeKind.CHANGED
@@ -102,18 +104,18 @@ def analyze_restore(storage: Storage, source: Path) -> RestoreAnalysis:
 
 
 def restore_backup(storage: Storage, source: Path) -> tuple[int, Path]:
-    restored_snippets = import_backup(Path(source))
-    current_snippets = storage.list_snippets()
+    restored_bundles = import_backup_bundles(Path(source))
+    current_bundles = storage.list_snippet_bundles()
     backup_directory = storage.path.parent / "Backups"
     safety_copy = backup_directory / (
-        f"QuickType-before-restore-{datetime.now():%Y%m%d-%H%M%S-%f}.json"
+        f"QuickType-before-restore-{datetime.now():%Y%m%d-%H%M%S-%f}.qtbackup"
     )
     export_backup(
         safety_copy,
-        current_snippets,
+        current_bundles,
         library_state=storage.export_library_state(),
     )
-    added, _skipped = storage.import_snippets(restored_snippets, replace=True)
+    added, _skipped = storage.import_snippet_bundles(restored_bundles, replace=True)
     library_state = import_library_state(Path(source))
     if library_state is not None:
         storage.restore_library_state(library_state)
@@ -130,7 +132,7 @@ def recover_database(
     source: Path | None,
 ) -> DatabaseRecoveryResult:
     path = Path(database)
-    snippets = import_backup(source) if source is not None else []
+    bundles = import_backup_bundles(source) if source is not None else []
     library_state = import_library_state(source) if source is not None else None
     path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -148,8 +150,8 @@ def recover_database(
     try:
         storage = Storage(path)
         storage.initialize()
-        if snippets:
-            storage.import_snippets(snippets, replace=True)
+        if bundles:
+            storage.import_snippet_bundles(bundles, replace=True)
         if library_state is not None:
             storage.restore_library_state(library_state)
     except Exception:
@@ -161,7 +163,7 @@ def recover_database(
             preserved.replace(original)
         raise
     return DatabaseRecoveryResult(
-        restored_count=len(snippets),
+        restored_count=len(bundles),
         source=Path(source) if source is not None else None,
         quarantined_database=quarantine if moved else None,
     )
@@ -180,15 +182,30 @@ RESTORABLE_FIELDS = (
     "description",
     "search_terms",
     "priority",
+    "content_format",
+    "rich_html",
+    "assets",
 )
 
 
 def _changed_fields(
-    current: Snippet,
-    incoming: Snippet,
+    current: SnippetBundle,
+    incoming: SnippetBundle,
 ) -> tuple[str, ...]:
-    return tuple(
+    fields = [
         field
         for field in RESTORABLE_FIELDS
-        if getattr(current, field) != getattr(incoming, field)
+        if field != "assets"
+        and getattr(current.snippet, field) != getattr(incoming.snippet, field)
+    ]
+    current_assets = tuple(
+        (asset.asset_id, asset.sha256, asset.original_name, asset.width, asset.height)
+        for asset in current.assets
     )
+    incoming_assets = tuple(
+        (asset.asset_id, asset.sha256, asset.original_name, asset.width, asset.height)
+        for asset in incoming.assets
+    )
+    if current_assets != incoming_assets:
+        fields.append("assets")
+    return tuple(fields)

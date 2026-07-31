@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html as html_module
 import sqlite3
+import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
@@ -20,20 +22,31 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
+    QColor,
     QDesktopServices,
     QFont,
     QIcon,
+    QImage,
     QKeySequence,
     QShortcut,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+    QTextCursor,
+    QTextDocument,
+    QTextFormat,
+    QTextImageFormat,
+    QTextListFormat,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFontComboBox,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -51,11 +64,14 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QSystemTrayIcon,
     QTableView,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -102,6 +118,9 @@ from .maintenance import (
 )
 from .models import (
     Snippet,
+    SnippetAsset,
+    SnippetBundle,
+    SnippetContentFormat,
     SnippetKind,
     TriggerMode,
     next_copy_abbreviation,
@@ -116,6 +135,15 @@ from .recovery import (
     RestoreChangeKind,
     analyze_restore,
     restore_backup,
+)
+from .rich_content import (
+    ASSET_SCHEME,
+    RichContentError,
+    create_image_asset,
+    html_to_plain,
+    import_data_images,
+    render_bundle,
+    sanitize_html,
 )
 from .search import SearchEntry, SearchIndex, normalize_search_text
 from .storage import DuplicateAbbreviationError, Storage
@@ -158,12 +186,130 @@ class NumericTableWidgetItem(QTableWidgetItem):
             return super().__lt__(other)
 
 
+SMART_TOKEN_RE = regex.compile(r"\{\{[^{}\r\n]+\}\}")
+
+
+class SmartElementHighlighter(QSyntaxHighlighter):
+    def highlightBlock(self, text: str) -> None:
+        format_ = QTextCharFormat()
+        format_.setBackground(QColor("#dbeafe"))
+        format_.setForeground(QColor("#1d4ed8"))
+        format_.setFontWeight(QFont.Weight.DemiBold)
+        for match in SMART_TOKEN_RE.finditer(text):
+            self.setFormat(match.start(), match.end() - match.start(), format_)
+
+
+def _select_smart_token_for_delete(
+    editor: QPlainTextEdit | QTextEdit,
+    *,
+    backwards: bool,
+) -> bool:
+    cursor = editor.textCursor()
+    if cursor.hasSelection():
+        return False
+    position = cursor.position()
+    probe = max(0, position - 1) if backwards else position
+    text = editor.toPlainText()
+    for match in SMART_TOKEN_RE.finditer(text):
+        if match.start() <= probe < match.end():
+            cursor.setPosition(match.start())
+            cursor.setPosition(match.end(), QTextCursor.MoveMode.KeepAnchor)
+            editor.setTextCursor(cursor)
+            cursor.removeSelectedText()
+            return True
+    return False
+
+
+def _smart_token_at_cursor(
+    editor: QPlainTextEdit | QTextEdit,
+) -> tuple[str, int, int] | None:
+    position = editor.textCursor().position()
+    for match in SMART_TOKEN_RE.finditer(editor.toPlainText()):
+        if match.start() <= position <= match.end():
+            return match.group(), match.start(), match.end()
+    return None
+
+
+class SmartPlainTextEdit(QPlainTextEdit):
+    smart_element_activated = Signal(str, int, int)
+
+    def keyPressEvent(self, event: object) -> None:
+        key = event.key() if hasattr(event, "key") else None
+        if key in {Qt.Key.Key_Enter, Qt.Key.Key_Return}:
+            token = _smart_token_at_cursor(self)
+            if token is not None:
+                self.smart_element_activated.emit(*token)
+                return
+        if key == Qt.Key.Key_Backspace and _select_smart_token_for_delete(
+            self, backwards=True
+        ):
+            return
+        if key == Qt.Key.Key_Delete and _select_smart_token_for_delete(
+            self, backwards=False
+        ):
+            return
+        super().keyPressEvent(event)  # type: ignore[arg-type]
+
+    def mouseDoubleClickEvent(self, event: object) -> None:
+        super().mouseDoubleClickEvent(event)  # type: ignore[arg-type]
+        token = _smart_token_at_cursor(self)
+        if token is not None:
+            self.smart_element_activated.emit(*token)
+
+
+class RichTextEdit(QTextEdit):
+    smart_element_activated = Signal(str, int, int)
+    image_paste_requested = Signal(object, str)
+
+    def keyPressEvent(self, event: object) -> None:
+        key = event.key() if hasattr(event, "key") else None
+        if key in {Qt.Key.Key_Enter, Qt.Key.Key_Return}:
+            token = _smart_token_at_cursor(self)
+            if token is not None:
+                self.smart_element_activated.emit(*token)
+                return
+        if key == Qt.Key.Key_Backspace and _select_smart_token_for_delete(
+            self, backwards=True
+        ):
+            return
+        if key == Qt.Key.Key_Delete and _select_smart_token_for_delete(
+            self, backwards=False
+        ):
+            return
+        super().keyPressEvent(event)  # type: ignore[arg-type]
+
+    def mouseDoubleClickEvent(self, event: object) -> None:
+        super().mouseDoubleClickEvent(event)  # type: ignore[arg-type]
+        token = _smart_token_at_cursor(self)
+        if token is not None:
+            self.smart_element_activated.emit(*token)
+
+    def insertFromMimeData(self, source: object) -> None:
+        if hasattr(source, "hasImage") and source.hasImage():
+            image = source.imageData()
+            if isinstance(image, QImage) and not image.isNull():
+                self.image_paste_requested.emit(image, "clipboard.png")
+                return
+        if hasattr(source, "hasUrls") and source.hasUrls():
+            for url in source.urls():
+                if url.isLocalFile():
+                    image = QImage(url.toLocalFile())
+                    if not image.isNull():
+                        self.image_paste_requested.emit(
+                            image,
+                            Path(url.toLocalFile()).name,
+                        )
+                        return
+        super().insertFromMimeData(source)  # type: ignore[arg-type]
+
+
 class EngineSignals(QObject):
     expanded = Signal(object)
     error = Signal(str)
     quick_access = Signal(int)
     clipboard_capture = Signal()
     form_requested = Signal(object, int)
+    rich_requested = Signal(object)
 
 
 class ExpansionFormDialog(QDialog):
@@ -238,12 +384,27 @@ class ExpansionFormDialog(QDialog):
 
 
 class TemplateAssistantDialog(QDialog):
-    TYPES = ("input", "choice", "check", "var", "calc", "snippet", "transform")
+    TYPES = (
+        "date",
+        "time",
+        "clipboard",
+        "cursor",
+        "input",
+        "choice",
+        "check",
+        "var",
+        "match",
+        "calc",
+        "snippet",
+        "transform",
+    )
 
     def __init__(
         self,
         translator: Translator,
         parent: QWidget | None = None,
+        *,
+        existing_token: str = "",
     ) -> None:
         super().__init__(parent)
         self.t = translator
@@ -288,6 +449,8 @@ class TemplateAssistantDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
         self._update_help()
+        if existing_token:
+            self._load_token(existing_token)
 
     @property
     def token(self) -> str:
@@ -295,6 +458,14 @@ class TemplateAssistantDialog(QDialog):
         identifier = escape_field_part(self.identifier_edit.text().strip())
         label = escape_field_part(self.label_edit.text().strip())
         raw_values = self.values_edit.text()
+        if token_type in {"date", "time"}:
+            return (
+                "{{" + token_type + ":" + self.identifier_edit.text().strip() + "}}"
+                if self.identifier_edit.text().strip()
+                else "{{" + token_type + "}}"
+            )
+        if token_type in {"clipboard", "cursor"}:
+            return "{{" + token_type + "}}"
         if token_type == "input":
             return (
                 "{{input:"
@@ -319,6 +490,8 @@ class TemplateAssistantDialog(QDialog):
             return "{{check:" + "|".join((identifier, label, checked, unchecked)) + "}}"
         if token_type == "var":
             return "{{var:" + identifier + "}}"
+        if token_type == "match":
+            return "{{match:" + identifier + "}}"
         if token_type == "calc":
             return "{{calc:" + self.identifier_edit.text().strip() + "}}"
         if token_type == "transform":
@@ -331,7 +504,10 @@ class TemplateAssistantDialog(QDialog):
 
     def _accept_if_valid(self) -> None:
         token_type = str(self.type_combo.currentData())
-        if not self.identifier_edit.text().strip():
+        if (
+            token_type not in {"date", "time", "clipboard", "cursor"}
+            and not self.identifier_edit.text().strip()
+        ):
             QMessageBox.warning(
                 self,
                 self.t("validation_title"),
@@ -356,10 +532,69 @@ class TemplateAssistantDialog(QDialog):
         self.transform_combo.setEnabled(token_type == "transform")
         self.transform_combo.setVisible(token_type == "transform")
         self.transform_label.setVisible(token_type == "transform")
+        self.identifier_edit.setEnabled(
+            token_type not in {"clipboard", "cursor"}
+        )
         self.label_edit.setEnabled(token_type in {"input", "choice", "check"})
         self.values_edit.setEnabled(
             token_type in {"input", "choice", "check", "transform"}
         )
+
+    def _load_token(self, source: str) -> None:
+        if not source.startswith("{{") or not source.endswith("}}"):
+            return
+        token = source[2:-2].strip()
+        kind, separator, payload = token.partition(":")
+        if not separator:
+            payload = ""
+        token_type = kind
+        if kind in {"upper", "lower", "title", "trim", "default"}:
+            token_type = "transform"
+        index = self.type_combo.findData(token_type)
+        if index < 0:
+            return
+        self.type_combo.setCurrentIndex(index)
+        parts = _split_smart_parts(payload)
+        if token_type in {"date", "time"}:
+            self.identifier_edit.setText(payload)
+        elif token_type in {"clipboard", "cursor"}:
+            pass
+        elif token_type in {"input", "choice", "check"}:
+            self.identifier_edit.setText(parts[0] if parts else "")
+            self.label_edit.setText(parts[1] if len(parts) > 1 else "")
+            values = parts[2:]
+            delimiter = ", " if token_type == "choice" else "|"
+            self.values_edit.setText(delimiter.join(values))
+        elif token_type == "transform":
+            transform_index = self.transform_combo.findData(kind)
+            self.transform_combo.setCurrentIndex(max(0, transform_index))
+            self.identifier_edit.setText(parts[0] if parts else "")
+            if kind == "default":
+                self.values_edit.setText(parts[1] if len(parts) > 1 else "")
+        else:
+            self.identifier_edit.setText(payload)
+        self._update_help()
+
+
+def _split_smart_parts(value: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for character in value:
+        if escaped:
+            current.append(character)
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "|":
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(character)
+    if escaped:
+        current.append("\\")
+    parts.append("".join(current))
+    return parts
 
 
 class SettingsDialog(QDialog):
@@ -2026,6 +2261,7 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self._selection_guard = False
         self._allow_close = False
+        self._editor_assets: tuple[SnippetAsset, ...] = ()
 
         self.setMinimumSize(920, 620)
         self.resize(1120, 720)
@@ -2395,24 +2631,89 @@ class MainWindow(QMainWindow):
         form.addWidget(self.priority_label, 7, 0)
         form.addWidget(self.priority_spin, 7, 1)
 
+        self.content_format_label = QLabel()
+        self.content_format_combo = QComboBox()
+        self.content_format_combo.addItem("Plain Text", SnippetContentFormat.PLAIN.value)
+        self.content_format_combo.addItem("Rich Text", SnippetContentFormat.RICH.value)
+        self.content_format_combo.currentIndexChanged.connect(
+            self._content_format_changed
+        )
+        form.addWidget(self.content_format_label, 8, 0)
+        form.addWidget(self.content_format_combo, 8, 1)
+
         self.enabled_checkbox = QCheckBox()
         self.enabled_checkbox.toggled.connect(self._editor_changed)
-        form.addWidget(self.enabled_checkbox, 8, 1)
+        form.addWidget(self.enabled_checkbox, 9, 1)
         self.favorite_checkbox = QCheckBox()
         self.favorite_checkbox.toggled.connect(self._editor_changed)
-        form.addWidget(self.favorite_checkbox, 9, 1)
+        form.addWidget(self.favorite_checkbox, 10, 1)
         self.stats_label = QLabel()
         self.stats_label.setProperty("kind", "muted")
-        form.addWidget(self.stats_label, 10, 1)
+        form.addWidget(self.stats_label, 11, 1)
         form.setColumnStretch(1, 1)
         layout.addLayout(form)
 
         self.expansion_label = QLabel()
         layout.addWidget(self.expansion_label)
-        self.expansion_edit = QPlainTextEdit()
+        self.content_stack = QStackedWidget()
+        self.expansion_edit = SmartPlainTextEdit()
         self.expansion_edit.setTabChangesFocus(False)
         self.expansion_edit.textChanged.connect(self._editor_changed)
-        layout.addWidget(self.expansion_edit, 2)
+        self.expansion_edit.smart_element_activated.connect(
+            self._edit_smart_element
+        )
+        self.plain_highlighter = SmartElementHighlighter(
+            self.expansion_edit.document()
+        )
+        self.content_stack.addWidget(self.expansion_edit)
+
+        rich_page = QWidget()
+        rich_layout = QVBoxLayout(rich_page)
+        rich_layout.setContentsMargins(0, 0, 0, 0)
+        self.rich_format_bar = self._build_rich_format_bar()
+        rich_layout.addWidget(self.rich_format_bar)
+        self.rich_tabs = QTabWidget()
+        self.rich_visual_edit = RichTextEdit()
+        self.rich_visual_edit.setAcceptRichText(True)
+        self.rich_visual_edit.textChanged.connect(self._rich_visual_changed)
+        self.rich_visual_edit.image_paste_requested.connect(
+            self._insert_image_object
+        )
+        self.rich_visual_edit.smart_element_activated.connect(
+            self._edit_smart_element
+        )
+        self.rich_highlighter = SmartElementHighlighter(
+            self.rich_visual_edit.document()
+        )
+        self.rich_tabs.addTab(self.rich_visual_edit, "Visual")
+
+        html_page = QWidget()
+        html_layout = QVBoxLayout(html_page)
+        html_layout.setContentsMargins(0, 0, 0, 0)
+        self.html_edit = SmartPlainTextEdit()
+        self.html_edit.textChanged.connect(self._editor_changed)
+        self.html_highlighter = SmartElementHighlighter(
+            self.html_edit.document()
+        )
+        html_layout.addWidget(self.html_edit)
+        html_actions = QHBoxLayout()
+        html_actions.addStretch(1)
+        self.apply_html_button = QPushButton()
+        self.apply_html_button.clicked.connect(self.apply_html_source)
+        html_actions.addWidget(self.apply_html_button)
+        html_layout.addLayout(html_actions)
+        self.rich_tabs.addTab(html_page, "HTML")
+
+        self.fallback_edit = SmartPlainTextEdit()
+        self.fallback_edit.setReadOnly(True)
+        self.fallback_highlighter = SmartElementHighlighter(
+            self.fallback_edit.document()
+        )
+        self.rich_tabs.addTab(self.fallback_edit, "Plain fallback")
+        self.rich_tabs.currentChanged.connect(self._rich_tab_changed)
+        rich_layout.addWidget(self.rich_tabs)
+        self.content_stack.addWidget(rich_page)
+        layout.addWidget(self.content_stack, 2)
 
         variable_row = QHBoxLayout()
         self.variables_label = QLabel()
@@ -2438,7 +2739,7 @@ class MainWindow(QMainWindow):
 
         self.preview_group = QGroupBox()
         preview_layout = QVBoxLayout(self.preview_group)
-        self.preview_edit = QPlainTextEdit()
+        self.preview_edit = QTextEdit()
         self.preview_edit.setReadOnly(True)
         self.preview_edit.setMaximumHeight(125)
         preview_layout.addWidget(self.preview_edit)
@@ -2461,6 +2762,287 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.save_button)
         layout.addLayout(buttons)
         return self.editor_panel
+
+    def _build_rich_format_bar(self) -> QWidget:
+        bar = QWidget()
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.rich_undo_button = QPushButton("↶")
+        self.rich_undo_button.clicked.connect(self.rich_visual_edit_undo)
+        row.addWidget(self.rich_undo_button)
+        self.rich_redo_button = QPushButton("↷")
+        self.rich_redo_button.clicked.connect(self.rich_visual_edit_redo)
+        row.addWidget(self.rich_redo_button)
+        self.format_buttons: dict[str, QPushButton] = {}
+        for label, name, callback in (
+            ("B", "bold", self._toggle_bold),
+            ("I", "italic", self._toggle_italic),
+            ("U", "underline", self._toggle_underline),
+            ("S", "strike", self._toggle_strike),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.clicked.connect(callback)
+            self.format_buttons[name] = button
+            row.addWidget(button)
+        self.font_combo = QFontComboBox()
+        self.font_combo.setMaximumWidth(155)
+        self.font_combo.currentFontChanged.connect(self._set_font_family)
+        row.addWidget(self.font_combo)
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(6, 96)
+        self.font_size_spin.setValue(11)
+        self.font_size_spin.valueChanged.connect(self._set_font_size)
+        row.addWidget(self.font_size_spin)
+        for label, callback in (
+            ("A", self._choose_text_color),
+            ("▨", self._choose_background_color),
+            ("←", lambda: self._set_alignment(Qt.AlignmentFlag.AlignLeft)),
+            ("↔", lambda: self._set_alignment(Qt.AlignmentFlag.AlignCenter)),
+            ("→", lambda: self._set_alignment(Qt.AlignmentFlag.AlignRight)),
+            ("•", lambda: self._insert_list(QTextListFormat.Style.ListDisc)),
+            ("1.", lambda: self._insert_list(QTextListFormat.Style.ListDecimal)),
+            ("🔗", self._set_link),
+            ("🖼", self.insert_image_from_file),
+            ("⚙", self.edit_current_image),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            row.addWidget(button)
+        row.addStretch(1)
+        return bar
+
+    def rich_visual_edit_undo(self) -> None:
+        self.rich_visual_edit.undo()
+
+    def rich_visual_edit_redo(self) -> None:
+        self.rich_visual_edit.redo()
+
+    def _merge_char_format(self, format_: QTextCharFormat) -> None:
+        cursor = self.rich_visual_edit.textCursor()
+        cursor.mergeCharFormat(format_)
+        self.rich_visual_edit.mergeCurrentCharFormat(format_)
+        self.rich_visual_edit.setFocus()
+
+    def _toggle_bold(self, checked: bool) -> None:
+        format_ = QTextCharFormat()
+        format_.setFontWeight(
+            QFont.Weight.Bold if checked else QFont.Weight.Normal
+        )
+        self._merge_char_format(format_)
+
+    def _toggle_italic(self, checked: bool) -> None:
+        format_ = QTextCharFormat()
+        format_.setFontItalic(checked)
+        self._merge_char_format(format_)
+
+    def _toggle_underline(self, checked: bool) -> None:
+        format_ = QTextCharFormat()
+        format_.setFontUnderline(checked)
+        self._merge_char_format(format_)
+
+    def _toggle_strike(self, checked: bool) -> None:
+        format_ = QTextCharFormat()
+        format_.setFontStrikeOut(checked)
+        self._merge_char_format(format_)
+
+    def _set_font_family(self, font: QFont) -> None:
+        if not hasattr(self, "rich_visual_edit"):
+            return
+        format_ = QTextCharFormat()
+        format_.setFontFamilies([font.family()])
+        self._merge_char_format(format_)
+
+    def _set_font_size(self, size: int) -> None:
+        if not hasattr(self, "rich_visual_edit"):
+            return
+        format_ = QTextCharFormat()
+        format_.setFontPointSize(float(size))
+        self._merge_char_format(format_)
+
+    def _choose_text_color(self) -> None:
+        color = QColorDialog.getColor(parent=self)
+        if color.isValid():
+            format_ = QTextCharFormat()
+            format_.setForeground(color)
+            self._merge_char_format(format_)
+
+    def _choose_background_color(self) -> None:
+        color = QColorDialog.getColor(parent=self)
+        if color.isValid():
+            format_ = QTextCharFormat()
+            format_.setBackground(color)
+            self._merge_char_format(format_)
+
+    def _set_alignment(self, alignment: Qt.AlignmentFlag) -> None:
+        self.rich_visual_edit.setAlignment(alignment)
+        self.rich_visual_edit.setFocus()
+
+    def _insert_list(self, style: QTextListFormat.Style) -> None:
+        cursor = self.rich_visual_edit.textCursor()
+        format_ = QTextListFormat()
+        format_.setStyle(style)
+        cursor.createList(format_)
+        self.rich_visual_edit.setFocus()
+
+    def _set_link(self) -> None:
+        cursor = self.rich_visual_edit.textCursor()
+        if not cursor.hasSelection():
+            QMessageBox.information(
+                self,
+                self.t("validation_title"),
+                self.t("rich_link_select_text"),
+            )
+            return
+        href, accepted = QInputDialog.getText(
+            self,
+            self.t("rich_link_title"),
+            self.t("rich_link_prompt"),
+        )
+        if not accepted:
+            return
+        href = href.strip()
+        if not href.startswith(("https://", "http://", "mailto:")):
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t("rich_link_invalid"),
+            )
+            return
+        format_ = QTextCharFormat()
+        format_.setAnchor(True)
+        format_.setAnchorHref(href)
+        format_.setForeground(QColor("#2563eb"))
+        format_.setFontUnderline(True)
+        cursor.mergeCharFormat(format_)
+
+    def insert_image_from_file(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            self.t("rich_image_insert"),
+            str(self.storage.path.parent),
+            self.t("rich_image_filter"),
+        )
+        if not path:
+            return
+        image = QImage(path)
+        if image.isNull():
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                self.t("rich_image_invalid"),
+            )
+            return
+        self._insert_image_object(image, Path(path).name)
+
+    def _insert_image_object(self, image: object, name: str) -> None:
+        if not isinstance(image, QImage):
+            return
+        try:
+            asset = create_image_asset(
+                image,
+                original_name=name,
+                prefer_jpeg=Path(name).suffix.casefold() in {".jpg", ".jpeg"},
+            )
+        except RichContentError as error:
+            QMessageBox.warning(self, self.t("validation_title"), str(error))
+            return
+        existing = next(
+            (
+                candidate
+                for candidate in self._editor_assets
+                if candidate.sha256 == asset.sha256
+            ),
+            None,
+        )
+        if existing is not None:
+            asset = existing
+        else:
+            self._editor_assets += (asset,)
+        url = QUrl(f"{ASSET_SCHEME}{asset.asset_id}")
+        self.rich_visual_edit.document().addResource(
+            QTextDocument.ResourceType.ImageResource,
+            url,
+            image,
+        )
+        image_format = QTextImageFormat()
+        image_format.setName(url.toString())
+        width = min(asset.width, 640)
+        image_format.setWidth(float(width))
+        image_format.setHeight(float(round(asset.height * width / asset.width)))
+        image_format.setProperty(
+            QTextFormat.Property.ImageAltText,
+            asset.original_name,
+        )
+        self.rich_visual_edit.textCursor().insertImage(image_format)
+        self._rich_visual_changed()
+
+    def edit_current_image(self) -> None:
+        cursor = self.rich_visual_edit.textCursor()
+        image_format = cursor.charFormat().toImageFormat()
+        if not image_format.isValid() or not image_format.name().startswith(ASSET_SCHEME):
+            cursor.movePosition(QTextCursor.MoveOperation.Left)
+            image_format = cursor.charFormat().toImageFormat()
+        if not image_format.isValid() or not image_format.name().startswith(ASSET_SCHEME):
+            QMessageBox.information(
+                self,
+                self.t("validation_title"),
+                self.t("rich_image_select"),
+            )
+            return
+        width, accepted = QInputDialog.getInt(
+            self,
+            self.t("rich_image_properties"),
+            self.t("rich_image_width"),
+            round(image_format.width()),
+            16,
+            4000,
+        )
+        if not accepted:
+            return
+        asset_id = image_format.name().removeprefix(ASSET_SCHEME)
+        asset = next(
+            (item for item in self._editor_assets if item.asset_id == asset_id),
+            None,
+        )
+        if asset is not None:
+            image_format.setWidth(float(width))
+            image_format.setHeight(float(round(asset.height * width / asset.width)))
+        alt, accepted = QInputDialog.getText(
+            self,
+            self.t("rich_image_properties"),
+            self.t("rich_image_alt"),
+            text=str(
+                image_format.property(QTextFormat.Property.ImageAltText) or ""
+            ),
+        )
+        if not accepted:
+            return
+        image_format.setProperty(QTextFormat.Property.ImageAltText, alt[:500])
+        cursor.setCharFormat(image_format)
+        link, accepted = QInputDialog.getText(
+            self,
+            self.t("rich_image_properties"),
+            self.t("rich_image_link"),
+        )
+        if accepted and link.strip():
+            if not link.startswith(("https://", "http://", "mailto:")):
+                QMessageBox.warning(
+                    self,
+                    self.t("validation_title"),
+                    self.t("rich_link_invalid"),
+                )
+                return
+            cursor.setPosition(cursor.position() - 1)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.Right,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            link_format = QTextCharFormat()
+            link_format.setAnchor(True)
+            link_format.setAnchorHref(link.strip())
+            cursor.mergeCharFormat(link_format)
+        self._rich_visual_changed()
 
     def retranslate(self) -> None:
         self.setWindowTitle(self.t("app_title"))
@@ -2535,6 +3117,22 @@ class MainWindow(QMainWindow):
         self.search_terms_label.setText(self.t("search_terms"))
         self.search_terms_edit.setPlaceholderText(self.t("search_terms_help"))
         self.priority_label.setText(self.t("regex_priority"))
+        current_content_format = self.content_format_combo.currentData()
+        with QSignalBlocker(self.content_format_combo):
+            self.content_format_combo.clear()
+            self.content_format_combo.addItem(
+                self.t("content_format_plain"),
+                SnippetContentFormat.PLAIN.value,
+            )
+            self.content_format_combo.addItem(
+                self.t("content_format_rich"),
+                SnippetContentFormat.RICH.value,
+            )
+            content_index = self.content_format_combo.findData(
+                current_content_format
+            )
+            self.content_format_combo.setCurrentIndex(max(0, content_index))
+        self.content_format_label.setText(self.t("content_format"))
         current_kind = self.kind_combo.currentData()
         with QSignalBlocker(self.kind_combo):
             self.kind_combo.clear()
@@ -2563,6 +3161,10 @@ class MainWindow(QMainWindow):
         for token, button in self.variable_buttons.items():
             button.setText(self.t(token))
         self.template_assistant_button.setText(self.t("template_assistant"))
+        self.rich_tabs.setTabText(0, self.t("rich_visual_tab"))
+        self.rich_tabs.setTabText(1, self.t("rich_html_tab"))
+        self.rich_tabs.setTabText(2, self.t("rich_fallback_tab"))
+        self.apply_html_button.setText(self.t("rich_apply_html"))
         self.preview_group.setTitle(self.t("preview"))
         self.copy_preview_button.setText(self.t("copy_rendered"))
         self.copy_preview_button.setToolTip(self.t("copy_rendered_tooltip"))
@@ -2755,6 +3357,13 @@ class MainWindow(QMainWindow):
             self._selection_guard = False
 
     def _load_snippet(self, snippet: Snippet) -> None:
+        bundle = (
+            self.storage.get_snippet_bundle(snippet.id)
+            if snippet.id is not None
+            else None
+        )
+        if bundle is not None:
+            snippet = bundle.snippet
         self._selection_guard = True
         try:
             self._current_id = snippet.id
@@ -2770,7 +3379,10 @@ class MainWindow(QMainWindow):
                 QSignalBlocker(self.priority_spin),
                 QSignalBlocker(self.enabled_checkbox),
                 QSignalBlocker(self.favorite_checkbox),
+                QSignalBlocker(self.content_format_combo),
                 QSignalBlocker(self.expansion_edit),
+                QSignalBlocker(self.rich_visual_edit),
+                QSignalBlocker(self.html_edit),
             ):
                 self.abbreviation_edit.setText(snippet.abbreviation)
                 self.category_combo.setEditText(snippet.category)
@@ -2787,6 +3399,23 @@ class MainWindow(QMainWindow):
                 self.enabled_checkbox.setChecked(snippet.enabled)
                 self.favorite_checkbox.setChecked(snippet.favorite)
                 self.expansion_edit.setPlainText(snippet.expansion)
+                self.content_format_combo.setCurrentIndex(
+                    self.content_format_combo.findData(
+                        snippet.content_format.value
+                    )
+                )
+                self.content_stack.setCurrentIndex(
+                    1
+                    if snippet.content_format == SnippetContentFormat.RICH
+                    else 0
+                )
+                if snippet.content_format == SnippetContentFormat.RICH:
+                    self._load_rich_document(
+                        snippet.rich_html,
+                        bundle.assets if bundle is not None else (),
+                    )
+                else:
+                    self._editor_assets = ()
             self.editor_panel.setEnabled(True)
             self._dirty = False
             self._update_stats_label(snippet)
@@ -2799,11 +3428,59 @@ class MainWindow(QMainWindow):
         self._begin_new_snippet("")
 
     def new_snippet_from_clipboard(self) -> None:
-        clipboard_text = QApplication.clipboard().text()
-        if not clipboard_text:
+        mime = QApplication.clipboard().mimeData()
+        if mime is None:
             self.status_message.setText(self.t("clipboard_has_no_text"))
             return
-        if self._begin_new_snippet(clipboard_text):
+        clipboard_text = mime.text() if mime.hasText() else ""
+        rich_html = ""
+        assets: tuple[SnippetAsset, ...] = ()
+        try:
+            if mime.hasHtml():
+                rich_html, assets = import_data_images(mime.html())
+            if mime.hasImage():
+                image_data = mime.imageData()
+                if isinstance(image_data, QImage) and not image_data.isNull():
+                    asset = create_image_asset(
+                        image_data,
+                        original_name="clipboard.png",
+                    )
+                    if all(existing.sha256 != asset.sha256 for existing in assets):
+                        assets += (asset,)
+                    else:
+                        asset = next(
+                            existing
+                            for existing in assets
+                            if existing.sha256 == asset.sha256
+                        )
+                    if f"{ASSET_SCHEME}{asset.asset_id}" not in rich_html:
+                        rich_html += (
+                            f'<p><img src="{ASSET_SCHEME}{asset.asset_id}" '
+                            f'alt="{html_module.escape(asset.original_name)}"></p>'
+                        )
+            if rich_html:
+                rich_html = sanitize_html(rich_html, assets)
+                referenced = {
+                    match.group(1)
+                    for match in regex.finditer(
+                        r"quicktype-asset://([0-9a-fA-F-]{36})",
+                        rich_html,
+                    )
+                }
+                assets = tuple(
+                    asset for asset in assets if asset.asset_id in referenced
+                )
+        except RichContentError:
+            rich_html = ""
+            assets = ()
+        if not clipboard_text and not rich_html:
+            self.status_message.setText(self.t("clipboard_has_no_text"))
+            return
+        if self._begin_new_snippet(
+            clipboard_text,
+            rich_html=rich_html,
+            assets=assets,
+        ):
             self.status_message.setText(
                 self.t(
                     "clipboard_snippet_ready",
@@ -2811,7 +3488,13 @@ class MainWindow(QMainWindow):
                 )
             )
 
-    def _begin_new_snippet(self, expansion: str) -> bool:
+    def _begin_new_snippet(
+        self,
+        expansion: str,
+        *,
+        rich_html: str = "",
+        assets: tuple[SnippetAsset, ...] = (),
+    ) -> bool:
         if not self._maybe_resolve_dirty():
             return False
         self._selection_guard = True
@@ -2833,7 +3516,25 @@ class MainWindow(QMainWindow):
             self.enabled_checkbox.setChecked(True)
             self.favorite_checkbox.setChecked(False)
             self.expansion_edit.setPlainText(expansion)
-            self._dirty = bool(expansion)
+            content_format = (
+                SnippetContentFormat.RICH
+                if rich_html
+                else SnippetContentFormat.PLAIN
+            )
+            self.content_format_combo.setCurrentIndex(
+                self.content_format_combo.findData(content_format.value)
+            )
+            self.content_stack.setCurrentIndex(
+                1 if content_format == SnippetContentFormat.RICH else 0
+            )
+            if rich_html:
+                self._load_rich_document(rich_html, assets)
+            else:
+                self._editor_assets = ()
+                self.rich_visual_edit.clear()
+                self.html_edit.clear()
+                self.fallback_edit.clear()
+            self._dirty = bool(expansion or rich_html)
             self.abbreviation_edit.setFocus()
             self.update_preview()
             self._update_kind_controls()
@@ -2904,6 +3605,56 @@ class MainWindow(QMainWindow):
                 str(error),
             )
             return False
+        content_format = self._content_format()
+        rich_html = ""
+        assets: tuple[SnippetAsset, ...] = ()
+        expansion = self.expansion_edit.toPlainText()
+        if content_format == SnippetContentFormat.RICH:
+            try:
+                visual_html = self._canonical_visual_html()
+            except RichContentError as error:
+                QMessageBox.warning(
+                    self,
+                    self.t("validation_title"),
+                    str(error),
+                )
+                return False
+            if (
+                self.html_edit.toPlainText() != visual_html
+                and not self.apply_html_source()
+            ):
+                return False
+            try:
+                rich_html = self._canonical_visual_html()
+            except RichContentError as error:
+                QMessageBox.warning(
+                    self,
+                    self.t("validation_title"),
+                    str(error),
+                )
+                return False
+            referenced = {
+                match.group(1)
+                for match in regex.finditer(
+                    r"quicktype-asset://([0-9a-fA-F-]{36})",
+                    rich_html,
+                )
+            }
+            assets = tuple(
+                asset
+                for asset in self._editor_assets
+                if asset.asset_id in referenced
+            )
+            try:
+                rich_html = sanitize_html(rich_html, assets)
+            except RichContentError as error:
+                QMessageBox.warning(
+                    self,
+                    self.t("validation_title"),
+                    str(error),
+                )
+                return False
+            expansion = html_to_plain(rich_html)
         template_issues = self._current_template_issues()
         if template_issues:
             QMessageBox.warning(
@@ -2921,7 +3672,7 @@ class MainWindow(QMainWindow):
         snippet = Snippet(
             id=self._current_id,
             abbreviation=abbreviation,
-            expansion=self.expansion_edit.toPlainText(),
+            expansion=expansion,
             trigger_mode=TriggerMode(str(self.mode_combo.currentData())),
             enabled=self.enabled_checkbox.isChecked(),
             category=category,
@@ -2931,9 +3682,14 @@ class MainWindow(QMainWindow):
             description=self.description_edit.text().strip(),
             search_terms=search_terms,
             priority=self.priority_spin.value(),
+            content_format=content_format,
+            rich_html=rich_html,
         )
         try:
-            saved = self.storage.save_snippet(snippet)
+            saved_bundle = self.storage.save_snippet_bundle(
+                SnippetBundle(snippet=snippet, assets=assets)
+            )
+            saved = saved_bundle.snippet
         except DuplicateAbbreviationError:
             QMessageBox.warning(
                 self,
@@ -3038,7 +3794,7 @@ class MainWindow(QMainWindow):
             return
         self._export_snippet_collection(
             snippets,
-            f"QuickType-selected-{datetime.now():%Y%m%d}.json",
+            f"QuickType-selected-{datetime.now():%Y%m%d}.qtbackup",
         )
 
     def delete_selected(self) -> None:
@@ -3183,18 +3939,34 @@ class MainWindow(QMainWindow):
             source.abbreviation,
             {entry.abbreviation for entry in self.snippets},
         )
-        duplicate = self.storage.save_snippet(
-            Snippet(
-                id=None,
-                abbreviation=abbreviation,
-                expansion=source.expansion,
-                trigger_mode=source.trigger_mode,
-                enabled=source.enabled,
-                category=source.category,
-                favorite=source.favorite,
-                applications=source.applications,
+        source_bundle = self.storage.get_snippet_bundle(self._current_id)
+        if source_bundle is None:
+            return
+        cloned_assets: list[SnippetAsset] = []
+        cloned_html = source.rich_html
+        for asset in source_bundle.assets:
+            asset_id = str(uuid.uuid4())
+            cloned_html = cloned_html.replace(
+                f"{ASSET_SCHEME}{asset.asset_id}",
+                f"{ASSET_SCHEME}{asset_id}",
+            )
+            cloned_assets.append(replace(asset, asset_id=asset_id))
+        duplicate_bundle = self.storage.save_snippet_bundle(
+            SnippetBundle(
+                snippet=replace(
+                    source,
+                    id=None,
+                    abbreviation=abbreviation,
+                    usage_count=0,
+                    last_used_at=None,
+                    created_at=None,
+                    updated_at=None,
+                    rich_html=cloned_html,
+                ),
+                assets=tuple(cloned_assets),
             )
         )
+        duplicate = duplicate_bundle.snippet
         self._current_id = duplicate.id
         self._is_new = False
         self._dirty = False
@@ -3209,7 +3981,7 @@ class MainWindow(QMainWindow):
             return
         self._export_snippet_collection(
             self.storage.list_snippets(),
-            f"QuickType-backup-{datetime.now():%Y%m%d}.json",
+            f"QuickType-backup-{datetime.now():%Y%m%d}.qtbackup",
         )
 
     def export_filtered_snippets(self) -> None:
@@ -3225,7 +3997,7 @@ class MainWindow(QMainWindow):
             return
         self._export_snippet_collection(
             snippets,
-            f"QuickType-filtered-{datetime.now():%Y%m%d}.json",
+            f"QuickType-filtered-{datetime.now():%Y%m%d}.qtbackup",
         )
 
     def filtered_snippets(self) -> list[Snippet]:
@@ -3254,9 +4026,17 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        identifiers = {
+            snippet.id for snippet in snippets if snippet.id is not None
+        }
+        bundles = [
+            bundle
+            for bundle in self.storage.list_snippet_bundles()
+            if bundle.snippet.id in identifiers
+        ]
         try:
-            export_backup(Path(path), snippets)
-        except OSError as error:
+            export_backup(Path(path), bundles)
+        except (OSError, BackupFormatError) as error:
             QMessageBox.warning(self, self.t("export_error_title"), str(error))
             return
         self.status_message.setText(
@@ -3480,25 +4260,27 @@ class MainWindow(QMainWindow):
             self._update_empty_state()
 
     def insert_variable(self, name: str) -> None:
-        cursor = self.expansion_edit.textCursor()
+        editor = self._active_content_editor()
+        cursor = editor.textCursor()
         cursor.insertText("{{" + name + "}}")
-        self.expansion_edit.setTextCursor(cursor)
-        self.expansion_edit.setFocus()
+        editor.setTextCursor(cursor)
+        editor.setFocus()
 
     def open_template_assistant(self) -> None:
         dialog = TemplateAssistantDialog(self.t, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        cursor = self.expansion_edit.textCursor()
+        editor = self._active_content_editor()
+        cursor = editor.textCursor()
         cursor.insertText(dialog.token)
-        self.expansion_edit.setTextCursor(cursor)
-        self.expansion_edit.setFocus()
+        editor.setTextCursor(cursor)
+        editor.setFocus()
 
     def copy_preview(self) -> None:
         if not self.editor_panel.isEnabled():
             return
-        self._copy_rendered_text(
-            self.expansion_edit.toPlainText(),
+        self._copy_rendered_bundle(
+            self._draft_bundle(),
             self.t("preview_copied"),
         )
 
@@ -3513,10 +4295,16 @@ class MainWindow(QMainWindow):
             self.copy_snippet_rendered(snippet)
 
     def copy_snippet_rendered(self, snippet: Snippet) -> None:
-        self._copy_rendered_text(
-            snippet.expansion,
-            self.t("snippet_copied", abbr=snippet.abbreviation),
+        bundle = (
+            self.storage.get_snippet_bundle(snippet.id)
+            if snippet.id is not None
+            else SnippetBundle(snippet)
         )
+        if bundle is not None:
+            self._copy_rendered_bundle(
+                bundle,
+                self.t("snippet_copied", abbr=snippet.abbreviation),
+            )
 
     def _copy_rendered_text(self, template: str, message: str) -> None:
         clipboard = QApplication.clipboard()
@@ -3527,11 +4315,209 @@ class MainWindow(QMainWindow):
         clipboard.setText(rendered.text)
         self.status_message.setText(message)
 
+    def _copy_rendered_bundle(
+        self,
+        bundle: SnippetBundle,
+        message: str,
+    ) -> None:
+        clipboard = QApplication.clipboard()
+        try:
+            rendered = render_bundle(
+                bundle,
+                clipboard_text=clipboard.text(),
+                snippet_provider=self._editor_bundle_provider(),
+            )
+        except RichContentError as error:
+            QMessageBox.warning(self, self.t("validation_title"), str(error))
+            return
+        if not rendered.html:
+            clipboard.setText(rendered.plain_text)
+        else:
+            from PySide6.QtCore import QMimeData
+
+            from .clipboard_paste import RTF_MIME
+
+            mime = QMimeData()
+            if rendered.rtf:
+                mime.setData(RTF_MIME, QByteArray(rendered.rtf + b"\0"))
+            mime.setHtml(rendered.html)
+            mime.setText(rendered.plain_text)
+            clipboard.setMimeData(mime)
+        self.status_message.setText(message)
+
     def _editor_changed(self, *_args: object) -> None:
         if self._selection_guard:
             return
         self._dirty = True
         self.update_preview()
+
+    def _content_format(self) -> SnippetContentFormat:
+        value = self.content_format_combo.currentData()
+        try:
+            return SnippetContentFormat(str(value))
+        except ValueError:
+            return SnippetContentFormat.PLAIN
+
+    def _content_format_changed(self, *_args: object) -> None:
+        target = self._content_format()
+        if self._selection_guard:
+            self.content_stack.setCurrentIndex(
+                1 if target == SnippetContentFormat.RICH else 0
+            )
+            return
+        previous = (
+            SnippetContentFormat.RICH
+            if self.content_stack.currentIndex() == 1
+            else SnippetContentFormat.PLAIN
+        )
+        if previous == target:
+            return
+        if target == SnippetContentFormat.RICH:
+            text = self.expansion_edit.toPlainText()
+            fragment = "<p>" + html_module.escape(text).replace("\n", "<br>") + "</p>"
+            self._editor_assets = ()
+            self._load_rich_document(fragment, ())
+            self.content_stack.setCurrentIndex(1)
+        else:
+            answer = QMessageBox.question(
+                self,
+                self.t("rich_convert_title"),
+                self.t("rich_convert_to_plain"),
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                with QSignalBlocker(self.content_format_combo):
+                    self.content_format_combo.setCurrentIndex(
+                        self.content_format_combo.findData(
+                            SnippetContentFormat.RICH.value
+                        )
+                    )
+                return
+            fallback = html_to_plain(self._canonical_visual_html())
+            self.expansion_edit.setPlainText(fallback)
+            self._editor_assets = ()
+            self.content_stack.setCurrentIndex(0)
+        self._editor_changed()
+
+    def _rich_visual_changed(self) -> None:
+        if self._selection_guard:
+            return
+        try:
+            canonical = self._canonical_visual_html()
+        except RichContentError:
+            canonical = self.rich_visual_edit.toHtml()
+        with (
+            QSignalBlocker(self.html_edit),
+            QSignalBlocker(self.fallback_edit),
+        ):
+            self.html_edit.setPlainText(canonical)
+            self.fallback_edit.setPlainText(html_to_plain(canonical))
+        self._editor_changed()
+
+    def _canonical_visual_html(self) -> str:
+        return sanitize_html(
+            self.rich_visual_edit.toHtml(),
+            self._editor_assets,
+        )
+
+    def _load_rich_document(
+        self,
+        source: str,
+        assets: tuple[SnippetAsset, ...],
+    ) -> None:
+        canonical = sanitize_html(source, assets)
+        self._editor_assets = assets
+        self.rich_visual_edit.setHtml(canonical)
+        for asset in assets:
+            image = QImage.fromData(asset.data)
+            if not image.isNull():
+                self.rich_visual_edit.document().addResource(
+                    QTextDocument.ResourceType.ImageResource,
+                    QUrl(f"{ASSET_SCHEME}{asset.asset_id}"),
+                    image,
+                )
+        with (
+            QSignalBlocker(self.html_edit),
+            QSignalBlocker(self.fallback_edit),
+        ):
+            self.html_edit.setPlainText(canonical)
+            self.fallback_edit.setPlainText(html_to_plain(canonical))
+
+    def apply_html_source(self) -> bool:
+        try:
+            source, assets = import_data_images(
+                self.html_edit.toPlainText(),
+                self._editor_assets,
+            )
+            canonical = sanitize_html(source, assets)
+            referenced = {
+                match.group(1)
+                for match in regex.finditer(
+                    r"quicktype-asset://([0-9a-fA-F-]{36})",
+                    canonical,
+                )
+            }
+            assets = tuple(
+                asset for asset in assets if asset.asset_id in referenced
+            )
+            canonical = sanitize_html(canonical, assets)
+        except RichContentError as error:
+            QMessageBox.warning(
+                self,
+                self.t("validation_title"),
+                str(error),
+            )
+            return False
+        self._selection_guard = True
+        try:
+            self._load_rich_document(canonical, assets)
+        finally:
+            self._selection_guard = False
+        self._dirty = True
+        self.update_preview()
+        return True
+
+    def _rich_tab_changed(self, index: int) -> None:
+        if self._selection_guard:
+            return
+        if index != 1:
+            try:
+                source_changed = (
+                    self.html_edit.toPlainText()
+                    != self._canonical_visual_html()
+                )
+            except RichContentError:
+                source_changed = True
+            if source_changed and not self.apply_html_source():
+                with QSignalBlocker(self.rich_tabs):
+                    self.rich_tabs.setCurrentIndex(1)
+        elif index == 1:
+            with QSignalBlocker(self.html_edit):
+                self.html_edit.setPlainText(self._canonical_visual_html())
+
+    def _active_content_editor(self) -> QPlainTextEdit | QTextEdit:
+        if self._content_format() == SnippetContentFormat.PLAIN:
+            return self.expansion_edit
+        if self.rich_tabs.currentIndex() == 1:
+            return self.html_edit
+        return self.rich_visual_edit
+
+    def _edit_smart_element(self, token: str, start: int, end: int) -> None:
+        editor = self.sender()
+        if not isinstance(editor, (QPlainTextEdit, QTextEdit)):
+            return
+        dialog = TemplateAssistantDialog(
+            self.t,
+            self,
+            existing_token=token,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        cursor = QTextCursor(editor.document())
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        cursor.insertText(dialog.token)
+        editor.setTextCursor(cursor)
+        editor.setFocus()
 
     def _snippet_kind_changed(self, *_args: object) -> None:
         self._update_kind_controls()
@@ -3551,7 +4537,7 @@ class MainWindow(QMainWindow):
     def update_preview(self) -> None:
         if not hasattr(self, "preview_edit"):
             return
-        template = self.expansion_edit.toPlainText()
+        template = self._current_template()
         provider = self._editor_snippet_provider()
         match_groups = self._editor_match_groups()
         rendered = render_template(
@@ -3560,7 +4546,22 @@ class MainWindow(QMainWindow):
             snippet_provider=provider,
             match_groups=match_groups,
         )
-        self.preview_edit.setPlainText(rendered.text)
+        if self._content_format() == SnippetContentFormat.RICH:
+            try:
+                rich_rendered = render_bundle(
+                    self._draft_bundle(),
+                    clipboard_text="",
+                    match_groups=match_groups,
+                    snippet_provider=self._editor_bundle_provider(),
+                )
+            except (RichContentError, ValueError):
+                self.preview_edit.setPlainText(rendered.text)
+            else:
+                self.preview_edit.setHtml(
+                    rich_rendered.html or html_module.escape(rich_rendered.plain_text)
+                )
+        else:
+            self.preview_edit.setPlainText(rendered.text)
         issues = inspect_template(
             template,
             snippet_provider=provider,
@@ -3578,14 +4579,14 @@ class MainWindow(QMainWindow):
 
     def _current_template_issues(self) -> tuple[TemplateIssue, ...]:
         return inspect_template(
-            self.expansion_edit.toPlainText(),
+            self._current_template(),
             snippet_provider=self._editor_snippet_provider(),
             match_groups=self._editor_match_groups(),
         )
 
     def _editor_snippet_provider(self) -> Callable[[str], str | None]:
         current_abbreviation = self.abbreviation_edit.text()
-        current_expansion = self.expansion_edit.toPlainText()
+        current_expansion = self._current_template()
         snippets = {
             snippet.abbreviation: snippet.expansion
             for snippet in self.snippets
@@ -3594,6 +4595,63 @@ class MainWindow(QMainWindow):
         if current_abbreviation:
             snippets[current_abbreviation] = current_expansion
         return snippets.get
+
+    def _current_template(self) -> str:
+        if (
+            hasattr(self, "content_format_combo")
+            and self._content_format() == SnippetContentFormat.RICH
+        ):
+            try:
+                return html_to_plain(self._canonical_visual_html())
+            except RichContentError:
+                return self.fallback_edit.toPlainText()
+        return self.expansion_edit.toPlainText()
+
+    def _draft_bundle(self) -> SnippetBundle:
+        content_format = self._content_format()
+        rich_html = ""
+        assets: tuple[SnippetAsset, ...] = ()
+        expansion = self.expansion_edit.toPlainText()
+        if content_format == SnippetContentFormat.RICH:
+            try:
+                rich_html = self._canonical_visual_html()
+            except RichContentError:
+                rich_html = self.html_edit.toPlainText()
+            expansion = html_to_plain(rich_html)
+            referenced = {
+                match.group(1)
+                for match in regex.finditer(
+                    r"quicktype-asset://([0-9a-fA-F-]{36})",
+                    rich_html,
+                )
+            }
+            assets = tuple(
+                asset
+                for asset in self._editor_assets
+                if asset.asset_id in referenced
+            )
+        snippet = Snippet(
+            id=self._current_id,
+            abbreviation=self.abbreviation_edit.text() or "__preview__",
+            expansion=expansion,
+            trigger_mode=TriggerMode.DELIMITER,
+            content_format=content_format,
+            rich_html=rich_html,
+        )
+        return SnippetBundle(snippet=snippet, assets=assets)
+
+    def _editor_bundle_provider(
+        self,
+    ) -> Callable[[str], SnippetBundle | None]:
+        bundles = {
+            bundle.snippet.abbreviation: bundle
+            for bundle in self.storage.list_snippet_bundles()
+            if bundle.snippet.enabled
+        }
+        current = self._draft_bundle()
+        if self.abbreviation_edit.text():
+            bundles[self.abbreviation_edit.text()] = current
+        return bundles.get
 
     def _editor_match_groups(self) -> dict[str, str]:
         if self.kind_combo.currentData() != SnippetKind.REGEX.value:
@@ -3974,7 +5032,7 @@ def apply_application_style(
             padding: 7px;
             spacing: 7px;
         }}
-        QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QTableWidget {{
+        QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QTableWidget {{
             background: {colors["input"]};
             border: 1px solid {colors["border"]};
             border-radius: 6px;
@@ -3982,7 +5040,7 @@ def apply_application_style(
             selection-background-color: {colors["accent"]};
             selection-color: {colors["accent_text"]};
         }}
-        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus,
+        QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus,
         QSpinBox:focus, QTableWidget:focus {{
             border: 2px solid {colors["accent"]};
         }}

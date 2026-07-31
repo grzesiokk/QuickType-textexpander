@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +12,9 @@ from typing import Iterator
 
 from .models import (
     Snippet,
+    SnippetAsset,
+    SnippetBundle,
+    SnippetContentFormat,
     SnippetKind,
     TriggerMode,
     normalize_applications,
@@ -19,7 +25,11 @@ from .models import (
     validate_snippet_trigger,
 )
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
+MAX_ASSET_BYTES = 10 * 1024 * 1024
+MAX_SNIPPET_ASSET_BYTES = 25 * 1024 * 1024
+MAX_LIBRARY_ASSET_BYTES = 250 * 1024 * 1024
+ASSET_URL_RE = re.compile(r"quicktype-asset://([0-9a-fA-F-]{36})")
 
 
 class DuplicateAbbreviationError(ValueError):
@@ -32,6 +42,8 @@ class Storage:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self._needs_v3_migration():
+            self._create_v3_migration_backup()
         with self._connection() as connection:
             connection.executescript(
                 """
@@ -63,7 +75,10 @@ class Storage:
                     description TEXT NOT NULL DEFAULT '',
                     search_terms TEXT NOT NULL DEFAULT '[]',
                     priority INTEGER NOT NULL DEFAULT 0
-                        CHECK(priority BETWEEN -1000 AND 1000)
+                        CHECK(priority BETWEEN -1000 AND 1000),
+                    content_format TEXT NOT NULL DEFAULT 'plain'
+                        CHECK(content_format IN ('plain', 'rich')),
+                    rich_html TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_snippets_enabled
@@ -91,6 +106,23 @@ class Storage:
                     last_used_at TEXT,
                     PRIMARY KEY(library_id, item_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS snippet_assets (
+                    asset_id TEXT PRIMARY KEY,
+                    snippet_id INTEGER NOT NULL
+                        REFERENCES snippets(id) ON DELETE CASCADE,
+                    mime_type TEXT NOT NULL
+                        CHECK(mime_type IN ('image/png', 'image/jpeg')),
+                    data BLOB NOT NULL,
+                    original_name TEXT NOT NULL DEFAULT '',
+                    width INTEGER NOT NULL CHECK(width > 0),
+                    height INTEGER NOT NULL CHECK(height > 0),
+                    sha256 TEXT NOT NULL,
+                    UNIQUE(snippet_id, sha256)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_snippet_assets_snippet
+                    ON snippet_assets(snippet_id);
                 """
             )
             columns = {
@@ -131,6 +163,15 @@ class Storage:
                 connection.execute(
                     "ALTER TABLE snippets ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
                 )
+            if "content_format" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN content_format "
+                    "TEXT NOT NULL DEFAULT 'plain'"
+                )
+            if "rich_html" not in columns:
+                connection.execute(
+                    "ALTER TABLE snippets ADD COLUMN rich_html TEXT NOT NULL DEFAULT ''"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_snippets_category "
                 "ON snippets(category COLLATE NOCASE)"
@@ -142,6 +183,46 @@ class Storage:
                 """,
                 (str(SCHEMA_VERSION),),
             )
+
+    def _needs_v3_migration(self) -> bool:
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return False
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(self.path, timeout=5)
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            if "snippets" not in tables:
+                return False
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(snippets)").fetchall()
+            }
+        except sqlite3.DatabaseError:
+            return False
+        finally:
+            if connection is not None:
+                connection.close()
+        return "content_format" not in columns or "rich_html" not in columns
+
+    def _create_v3_migration_backup(self) -> None:
+        backup_directory = self.path.parent / "Backups"
+        backup_directory.mkdir(parents=True, exist_ok=True)
+        destination = backup_directory / (
+            f"QuickType-before-v3-migration-"
+            f"{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
+        )
+        source = sqlite3.connect(self.path, timeout=5)
+        target = sqlite3.connect(destination, timeout=5)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -161,7 +242,7 @@ class Storage:
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
                        usage_count, last_used_at, category, favorite, applications,
-                       kind, description, search_terms, priority
+                       kind, description, search_terms, priority, content_format, rich_html
                 FROM snippets
                 ORDER BY abbreviation COLLATE NOCASE, id
                 """
@@ -182,12 +263,46 @@ class Storage:
                 """
                 SELECT id, abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
                        usage_count, last_used_at, category, favorite, applications,
-                       kind, description, search_terms, priority
+                       kind, description, search_terms, priority, content_format, rich_html
                 FROM snippets WHERE id = ?
                 """,
                 (snippet_id,),
             ).fetchone()
         return self._row_to_snippet(row) if row else None
+
+    def get_snippet_bundle(self, snippet_id: int) -> SnippetBundle | None:
+        snippet = self.get_snippet(snippet_id)
+        if snippet is None:
+            return None
+        with self._connection() as connection:
+            assets = self._assets_for_snippet(connection, snippet_id)
+        return SnippetBundle(snippet=snippet, assets=assets)
+
+    def list_snippet_bundles(self) -> list[SnippetBundle]:
+        snippets = self.list_snippets()
+        if not snippets:
+            return []
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT asset_id, snippet_id, mime_type, data, original_name,
+                       width, height, sha256
+                FROM snippet_assets
+                ORDER BY snippet_id, asset_id
+                """
+            ).fetchall()
+        assets_by_snippet: dict[int, list[SnippetAsset]] = {}
+        for row in rows:
+            assets_by_snippet.setdefault(int(row["snippet_id"]), []).append(
+                self._row_to_asset(row)
+            )
+        return [
+            SnippetBundle(
+                snippet=snippet,
+                assets=tuple(assets_by_snippet.get(int(snippet.id or 0), ())),
+            )
+            for snippet in snippets
+        ]
 
     def list_categories(self) -> list[tuple[str, int]]:
         with self._connection() as connection:
@@ -244,6 +359,17 @@ class Storage:
         return cursor.rowcount
 
     def save_snippet(self, snippet: Snippet) -> Snippet:
+        existing_assets: tuple[SnippetAsset, ...] = ()
+        if snippet.id is not None and snippet.content_format == SnippetContentFormat.RICH:
+            current = self.get_snippet_bundle(snippet.id)
+            if current is not None:
+                existing_assets = current.assets
+        return self.save_snippet_bundle(
+            SnippetBundle(snippet=snippet, assets=existing_assets)
+        ).snippet
+
+    def save_snippet_bundle(self, bundle: SnippetBundle) -> SnippetBundle:
+        snippet = bundle.snippet
         issues = validate_snippet_trigger(snippet.abbreviation, snippet.kind)
         if issues:
             raise ValueError(issues[0].message)
@@ -258,18 +384,24 @@ class Storage:
             raise ValueError(description_issues[0].message)
         search_terms = normalize_search_terms(snippet.search_terms)
         priority = normalize_priority(snippet.priority)
+        assets = self._validated_assets(snippet, bundle.assets)
         timestamp = datetime.now().isoformat(timespec="seconds")
 
         try:
             with self._connection() as connection:
+                self._validate_library_asset_limit(
+                    connection,
+                    assets,
+                    excluding_snippet_id=snippet.id,
+                )
                 if snippet.id is None:
                     cursor = connection.execute(
                         """
                         INSERT INTO snippets(
                             abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
                             usage_count, last_used_at, category, favorite, applications,
-                            kind, description, search_terms, priority
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            kind, description, search_terms, priority, content_format, rich_html
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             snippet.abbreviation,
@@ -289,6 +421,8 @@ class Storage:
                             description,
                             json.dumps(search_terms, ensure_ascii=False),
                             priority,
+                            snippet.content_format.value,
+                            snippet.rich_html,
                         ),
                     )
                     if cursor.lastrowid is None:
@@ -303,7 +437,8 @@ class Storage:
                         SET abbreviation = ?, expansion = ?, trigger_mode = ?,
                             enabled = ?, updated_at = ?, category = ?, favorite = ?,
                             applications = ?, kind = ?, description = ?,
-                            search_terms = ?, priority = ?
+                            search_terms = ?, priority = ?, content_format = ?,
+                            rich_html = ?
                         WHERE id = ?
                         """,
                         (
@@ -319,21 +454,128 @@ class Storage:
                             description,
                             json.dumps(search_terms, ensure_ascii=False),
                             priority,
+                            snippet.content_format.value,
+                            snippet.rich_html,
                             snippet.id,
                         ),
                     )
                     if cursor.rowcount == 0:
                         raise KeyError(f"Snippet {snippet.id} does not exist")
                     snippet_id = int(snippet.id)
+                self._replace_assets(connection, int(snippet_id), assets)
         except sqlite3.IntegrityError as error:
-            if "UNIQUE" in str(error).upper():
+            if "snippets.abbreviation" in str(error):
                 raise DuplicateAbbreviationError(snippet.abbreviation) from error
             raise
 
-        saved = self.get_snippet(snippet_id)
+        saved = self.get_snippet_bundle(int(snippet_id))
         if saved is None:
             raise RuntimeError("Saved snippet could not be read back")
         return saved
+
+    @staticmethod
+    def _validated_assets(
+        snippet: Snippet,
+        assets: tuple[SnippetAsset, ...],
+    ) -> tuple[SnippetAsset, ...]:
+        if snippet.content_format == SnippetContentFormat.PLAIN:
+            if snippet.rich_html or assets:
+                raise ValueError("Plain snippets cannot contain rich content or images.")
+            return ()
+        identifiers: set[str] = set()
+        hashes: set[str] = set()
+        total_bytes = 0
+        for asset in assets:
+            try:
+                identifier = str(uuid.UUID(asset.asset_id))
+            except (ValueError, AttributeError) as error:
+                raise ValueError("Image asset identifier is invalid.") from error
+            if identifier != asset.asset_id:
+                raise ValueError("Image asset identifier must use canonical UUID form.")
+            if identifier in identifiers:
+                raise ValueError("Image asset identifiers must be unique.")
+            identifiers.add(identifier)
+            if asset.mime_type not in {"image/png", "image/jpeg"}:
+                raise ValueError("Images must be stored as PNG or JPEG.")
+            if not asset.data or len(asset.data) > MAX_ASSET_BYTES:
+                raise ValueError("An image exceeds the 10 MiB limit.")
+            digest = hashlib.sha256(asset.data).hexdigest()
+            if asset.sha256 != digest:
+                raise ValueError("Image checksum does not match its data.")
+            if digest in hashes:
+                raise ValueError("Duplicate images must reuse the same asset.")
+            hashes.add(digest)
+            if not (0 < asset.width <= 16384 and 0 < asset.height <= 16384):
+                raise ValueError("Image dimensions are invalid.")
+            if (
+                len(asset.original_name) > 255
+                or Path(asset.original_name).name != asset.original_name
+                or any(ord(character) < 32 for character in asset.original_name)
+            ):
+                raise ValueError("Image file name is invalid.")
+            total_bytes += len(asset.data)
+        if total_bytes > MAX_SNIPPET_ASSET_BYTES:
+            raise ValueError("A snippet cannot contain more than 25 MiB of images.")
+        referenced = set(ASSET_URL_RE.findall(snippet.rich_html))
+        if referenced != identifiers:
+            raise ValueError("Rich HTML and embedded image assets are inconsistent.")
+        return tuple(assets)
+
+    @staticmethod
+    def _validate_library_asset_limit(
+        connection: sqlite3.Connection,
+        assets: tuple[SnippetAsset, ...],
+        *,
+        excluding_snippet_id: int | None,
+    ) -> None:
+        if excluding_snippet_id is None:
+            row = connection.execute(
+                "SELECT COALESCE(SUM(length(data)), 0) FROM snippet_assets"
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                SELECT COALESCE(SUM(length(data)), 0)
+                FROM snippet_assets
+                WHERE snippet_id <> ?
+                """,
+                (excluding_snippet_id,),
+            ).fetchone()
+        existing_bytes = int(row[0]) if row else 0
+        if existing_bytes + sum(len(asset.data) for asset in assets) > MAX_LIBRARY_ASSET_BYTES:
+            raise ValueError("The image library cannot exceed 250 MiB.")
+
+    @staticmethod
+    def _replace_assets(
+        connection: sqlite3.Connection,
+        snippet_id: int,
+        assets: tuple[SnippetAsset, ...],
+    ) -> None:
+        connection.execute(
+            "DELETE FROM snippet_assets WHERE snippet_id = ?",
+            (snippet_id,),
+        )
+        connection.executemany(
+            """
+            INSERT INTO snippet_assets(
+                asset_id, snippet_id, mime_type, data, original_name,
+                width, height, sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    asset.asset_id,
+                    snippet_id,
+                    asset.mime_type,
+                    asset.data,
+                    asset.original_name,
+                    asset.width,
+                    asset.height,
+                    asset.sha256,
+                )
+                for asset in assets
+            ),
+        )
 
     def delete_snippet(self, snippet_id: int) -> None:
         with self._connection() as connection:
@@ -433,8 +675,19 @@ class Storage:
         return cursor.rowcount
 
     def import_snippets(self, snippets: list[Snippet], *, replace: bool) -> tuple[int, int]:
+        return self.import_snippet_bundles(
+            [SnippetBundle(snippet) for snippet in snippets],
+            replace=replace,
+        )
+
+    def import_snippet_bundles(
+        self,
+        bundles: list[SnippetBundle],
+        *,
+        replace: bool,
+    ) -> tuple[int, int]:
         added, _updated, skipped = self._write_import(
-            snippets,
+            bundles,
             replace=replace,
             overwrite_conflicts=False,
         )
@@ -444,8 +697,16 @@ class Storage:
         self,
         snippets: list[Snippet],
     ) -> tuple[int, int]:
+        return self.update_import_bundles(
+            [SnippetBundle(snippet) for snippet in snippets]
+        )
+
+    def update_import_bundles(
+        self,
+        bundles: list[SnippetBundle],
+    ) -> tuple[int, int]:
         added, updated, _skipped = self._write_import(
-            snippets,
+            bundles,
             replace=False,
             overwrite_conflicts=True,
         )
@@ -453,12 +714,13 @@ class Storage:
 
     def _write_import(
         self,
-        snippets: list[Snippet],
+        bundles: list[SnippetBundle],
         *,
         replace: bool,
         overwrite_conflicts: bool,
     ) -> tuple[int, int, int]:
-        for snippet in snippets:
+        for bundle in bundles:
+            snippet = bundle.snippet
             issues = validate_snippet_trigger(snippet.abbreviation, snippet.kind)
             if issues:
                 raise ValueError(issues[0].message)
@@ -470,8 +732,9 @@ class Storage:
                 raise ValueError("Invalid snippet description.")
             normalize_search_terms(snippet.search_terms)
             normalize_priority(snippet.priority)
+            self._validated_assets(snippet, bundle.assets)
 
-        abbreviations = [snippet.abbreviation for snippet in snippets]
+        abbreviations = [bundle.snippet.abbreviation for bundle in bundles]
         if len(abbreviations) != len(set(abbreviations)):
             raise DuplicateAbbreviationError("Duplicate abbreviation in backup")
 
@@ -489,7 +752,9 @@ class Storage:
                     for row in connection.execute("SELECT abbreviation FROM snippets").fetchall()
                 }
 
-            for snippet in snippets:
+            for bundle in bundles:
+                snippet = bundle.snippet
+                assets = self._validated_assets(snippet, bundle.assets)
                 if snippet.abbreviation in existing:
                     if overwrite_conflicts:
                         values = self._import_values(snippet, now)
@@ -500,11 +765,19 @@ class Storage:
                                 created_at = ?, updated_at = ?, usage_count = ?,
                                 last_used_at = ?, category = ?, favorite = ?,
                                 applications = ?, kind = ?, description = ?,
-                                search_terms = ?, priority = ?
+                                search_terms = ?, priority = ?, content_format = ?,
+                                rich_html = ?
                             WHERE abbreviation = ?
                             """,
                             values[1:] + (snippet.abbreviation,),
                         )
+                        row = connection.execute(
+                            "SELECT id FROM snippets WHERE abbreviation = ?",
+                            (snippet.abbreviation,),
+                        ).fetchone()
+                        if row is None:
+                            raise RuntimeError("Updated snippet could not be found.")
+                        self._replace_assets(connection, int(row["id"]), assets)
                         updated += 1
                     else:
                         skipped += 1
@@ -514,13 +787,25 @@ class Storage:
                     INSERT INTO snippets(
                         abbreviation, expansion, trigger_mode, enabled, created_at, updated_at,
                         usage_count, last_used_at, category, favorite, applications,
-                        kind, description, search_terms, priority
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        kind, description, search_terms, priority, content_format, rich_html
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     self._import_values(snippet, now),
                 )
+                row = connection.execute(
+                    "SELECT id FROM snippets WHERE abbreviation = ?",
+                    (snippet.abbreviation,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("Imported snippet could not be found.")
+                self._replace_assets(connection, int(row["id"]), assets)
                 existing.add(snippet.abbreviation)
                 added += 1
+            row = connection.execute(
+                "SELECT COALESCE(SUM(length(data)), 0) FROM snippet_assets"
+            ).fetchone()
+            if row and int(row[0]) > MAX_LIBRARY_ASSET_BYTES:
+                raise ValueError("The image library cannot exceed 250 MiB.")
         return added, updated, skipped
 
     @staticmethod
@@ -562,6 +847,8 @@ class Storage:
                 ensure_ascii=False,
             ),
             normalize_priority(snippet.priority),
+            snippet.content_format.value,
+            snippet.rich_html,
         )
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
@@ -870,7 +1157,38 @@ class Storage:
             description=str(row["description"]),
             search_terms=Storage._decode_search_terms(str(row["search_terms"])),
             priority=int(row["priority"]),
+            content_format=SnippetContentFormat(str(row["content_format"])),
+            rich_html=str(row["rich_html"]),
         )
+
+    @staticmethod
+    def _row_to_asset(row: sqlite3.Row) -> SnippetAsset:
+        return SnippetAsset(
+            asset_id=str(row["asset_id"]),
+            mime_type=str(row["mime_type"]),
+            data=bytes(row["data"]),
+            original_name=str(row["original_name"]),
+            width=int(row["width"]),
+            height=int(row["height"]),
+            sha256=str(row["sha256"]),
+        )
+
+    @classmethod
+    def _assets_for_snippet(
+        cls,
+        connection: sqlite3.Connection,
+        snippet_id: int,
+    ) -> tuple[SnippetAsset, ...]:
+        rows = connection.execute(
+            """
+            SELECT asset_id, mime_type, data, original_name, width, height, sha256
+            FROM snippet_assets
+            WHERE snippet_id = ?
+            ORDER BY asset_id
+            """,
+            (snippet_id,),
+        ).fetchall()
+        return tuple(cls._row_to_asset(row) for row in rows)
 
     @staticmethod
     def _decode_applications(value: str) -> tuple[str, ...]:

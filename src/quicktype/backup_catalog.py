@@ -26,7 +26,7 @@ class BackupEntry:
     snippet_count: int
 
 
-TIMESTAMP_SUFFIX = r"\d{8}-\d{6}-\d{6}\.json"
+TIMESTAMP_SUFFIX = r"\d{8}-\d{6}-\d{6}\.(?:json|qtbackup)"
 BACKUP_PATTERNS = {
     BackupKind.MANUAL: re.compile(
         rf"QuickType-manual-{TIMESTAMP_SUFFIX}"
@@ -56,7 +56,7 @@ def list_backup_entries(directory: Path) -> list[BackupEntry]:
         return []
     entries: list[BackupEntry] = []
     for path in location.iterdir():
-        if not path.is_file() or path.suffix.casefold() != ".json":
+        if not path.is_file() or path.suffix.casefold() not in {".json", ".qtbackup"}:
             continue
         try:
             snippets = import_backup(path)
@@ -84,6 +84,9 @@ def list_backup_entries(directory: Path) -> list[BackupEntry]:
 def delete_backup_file(directory: Path, path: Path) -> None:
     location = Path(directory).resolve()
     target = Path(path).resolve()
-    if target.parent != location or target.suffix.casefold() != ".json":
+    if target.parent != location or target.suffix.casefold() not in {
+        ".json",
+        ".qtbackup",
+    }:
         raise ValueError("The selected file is outside the backup directory.")
     target.unlink()

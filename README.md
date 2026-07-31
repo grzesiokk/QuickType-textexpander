@@ -10,8 +10,10 @@ Python on the target computer.
 
 ![QuickType running on Windows 11](docs/quicktype-screenshot.png)
 
-QuickType 2.1 adds an optional session-only clipboard history and safe text
-transforms in templates while remaining fully local.
+QuickType 3.0 adds rich snippets with a Visual/HTML editor, embedded images,
+multi-format Windows paste, and visual Smart Elements while remaining fully
+local. Existing and newly created snippets stay Plain Text unless explicitly
+converted.
 
 ## Ready-to-use application
 
@@ -44,6 +46,13 @@ Close QuickType from its tray menu before copying its database.
    expansion text and choose a trigger mode.
 4. Save the snippet and try it in Notepad, Word, a browser, VS Code, or Windows
    Terminal.
+
+For rich content, change **Content format** to **Rich Text**. The **Visual**
+tab provides formatting, links, lists, and embedded images; **HTML** exposes
+the sanitized portable source; **Plain fallback** shows the automatically
+generated text used by targets that do not accept rich clipboard formats.
+Smart Elements are displayed as atomic chips in both Plain and Visual editors
+and remain portable as `{{...}}` markers in HTML source.
 
 Use **Duplicate** / **Duplikuj** or `Ctrl+D` to create an editable copy of the
 selected snippet. Its abbreviation receives a unique `_copy` suffix.
@@ -176,8 +185,8 @@ to work when text expansion itself is paused.
   the snippet context menu.
 
 Copied results render date, time, clipboard, and cursor variables in the same
-way as expansion. `{{cursor}}` is removed because the clipboard contains plain
-text and has no cursor position.
+way as expansion. Rich results publish RTF, HTML, and plain text together;
+the receiving application selects the richest supported format.
 
 ## Application-specific snippets
 
@@ -195,8 +204,9 @@ to both typed abbreviations and the quick-access picker.
   trigger the same automatic backup protection as ordinary edits.
 - Favorite status is shown with a star and is also preserved in backups.
 - Per-snippet application rules are preserved in backups.
-- **Export** creates a human-readable UTF-8 JSON backup containing all snippets
-  and their usage statistics.
+- **Export** creates a portable `.qtbackup` ZIP package containing a manifest,
+  all snippet metadata, and checksum-verified deduplicated image assets.
+- Legacy JSON v1/v2 backups remain importable as Plain Text snippets.
 - Use the arrow beside **Export** and choose **Export visible** to save only the
   snippets shown by the current search and category filters.
 - Automatic backups are enabled by default. QuickType writes them after snippet
@@ -204,9 +214,10 @@ to both typed abbreviations and the quick-access picker.
   between 1 and 200 automatic copies.
 - **Backups** / **Kopie** opens a unified browser for automatic and manual
   backups, safety copies created before imports and restores, and other valid
-  QuickType JSON backups stored in `QuickTypeData\Backups`.
+  QuickType `.qtbackup` packages and legacy JSON backups stored in
+  `QuickTypeData\Backups`.
 - The browser shows each backup's type, date, snippet count, and file name. Use
-  the type filter to narrow the list. Invalid or damaged JSON files are ignored.
+  the type filter to narrow the list. Invalid or damaged packages are ignored.
 - Selecting a backup shows a read-only restore impact summary: snippets that
   will be added, changed, removed, or left unchanged. The same counts are
   repeated in the final confirmation before any data is modified.
@@ -217,9 +228,9 @@ to both typed abbreviations and the quick-access picker.
   clipboard. The browser can also refresh the catalog, open the backup folder,
   and permanently delete a selected backup after explicit confirmation.
 - Before restoring any listed backup, QuickType saves an additional
-  `QuickType-before-restore-*.json` safety copy of the current state.
+  `QuickType-before-restore-*.qtbackup` safety copy of the current state.
 - If SQLite is damaged or fails its startup integrity check, QuickType offers
-  to restore the newest valid JSON backup. The damaged database and sidecar
+  to restore the newest valid backup. The damaged database and sidecar
   files are quarantined instead of overwritten.
 - **Import** first shows how many snippets are new and lists every abbreviation
   that conflicts with the current library. The conflict table compares the
@@ -228,7 +239,7 @@ to both typed abbreviations and the quick-access picker.
   overwrite only conflicts while preserving the rest of the library, or
   **Replace** to replace the full library.
 - Before either import mode changes data, QuickType writes a timestamped
-  `QuickType-before-import-*.json` safety copy of the current library to
+  `QuickType-before-import-*.qtbackup` safety copy of the current library to
   `QuickTypeData\Backups`.
 - The snippet list shows how many times each abbreviation has expanded. The
   editor also shows the most recent use.
@@ -244,10 +255,10 @@ to both typed abbreviations and the quick-access picker.
 ## Data maintenance
 
 Open **Data** / **Dane** from the **Tools** menu to see the number of snippets,
-the number of JSON backups, the SQLite database size, and the exact data-folder
+the number of backups, the SQLite database size, and the exact data-folder
 path. From the same window you can:
 
-- create a timestamped `QuickType-manual-*.json` backup immediately;
+- create a timestamped `QuickType-manual-*.qtbackup` immediately;
 - run SQLite's integrity check without modifying the database;
 - copy a privacy-safe diagnostic report containing health and counts but no
   abbreviations, expansion text, clipboard data, typed characters, categories,
@@ -298,7 +309,7 @@ Run all local quality gates:
 
 ```powershell
 .\.venv\Scripts\ruff.exe check src tests scripts
-.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/rich_content.py src/quicktype/clipboard_paste.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
 .\.venv\Scripts\python.exe -m pytest --cov=quicktype --cov-fail-under=72
 .\.venv\Scripts\pip-audit.exe --local --skip-editable
 ```

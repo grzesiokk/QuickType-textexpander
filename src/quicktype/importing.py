@@ -5,8 +5,8 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from .backup import export_backup, import_backup
-from .models import Snippet
+from .backup import export_backup, import_backup_bundles
+from .models import Snippet, SnippetBundle
 from .storage import Storage
 
 
@@ -29,8 +29,12 @@ class ImportConflict:
 @dataclass(frozen=True, slots=True)
 class ImportAnalysis:
     source: Path
-    snippets: tuple[Snippet, ...]
+    bundles: tuple[SnippetBundle, ...]
     conflicts: tuple[ImportConflict, ...]
+
+    @property
+    def snippets(self) -> tuple[Snippet, ...]:
+        return tuple(bundle.snippet for bundle in self.bundles)
 
     @property
     def incoming_count(self) -> int:
@@ -50,7 +54,8 @@ class ImportResult:
 
 
 def analyze_import(storage: Storage, source: Path) -> ImportAnalysis:
-    snippets = tuple(import_backup(Path(source)))
+    bundles = tuple(import_backup_bundles(Path(source)))
+    snippets = tuple(bundle.snippet for bundle in bundles)
     existing = {
         snippet.abbreviation: snippet
         for snippet in storage.list_snippets()
@@ -73,7 +78,7 @@ def analyze_import(storage: Storage, source: Path) -> ImportAnalysis:
     )
     return ImportAnalysis(
         source=Path(source),
-        snippets=snippets,
+        bundles=bundles,
         conflicts=conflicts,
     )
 
@@ -85,21 +90,21 @@ def apply_import(
     mode: ImportMode,
 ) -> ImportResult:
     safety_copy = storage.path.parent / "Backups" / (
-        f"QuickType-before-import-{datetime.now():%Y%m%d-%H%M%S-%f}.json"
+        f"QuickType-before-import-{datetime.now():%Y%m%d-%H%M%S-%f}.qtbackup"
     )
     export_backup(
         safety_copy,
-        storage.list_snippets(),
+        storage.list_snippet_bundles(),
         library_state=storage.export_library_state(),
     )
     if mode == ImportMode.UPDATE:
-        added, updated = storage.update_import_snippets(
-            list(analysis.snippets)
+        added, updated = storage.update_import_bundles(
+            list(analysis.bundles)
         )
         skipped = 0
     else:
-        added, skipped = storage.import_snippets(
-            list(analysis.snippets),
+        added, skipped = storage.import_snippet_bundles(
+            list(analysis.bundles),
             replace=mode == ImportMode.REPLACE,
         )
         updated = 0
