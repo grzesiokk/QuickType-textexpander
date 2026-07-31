@@ -1,6 +1,7 @@
 # QuickType
 
 [![Windows build](https://github.com/grzesiokk/QuickType-textexpander/actions/workflows/windows-build.yml/badge.svg)](https://github.com/grzesiokk/QuickType-textexpander/actions/workflows/windows-build.yml)
+[![Latest release](https://img.shields.io/github/v/release/grzesiokk/QuickType-textexpander)](https://github.com/grzesiokk/QuickType-textexpander/releases/latest)
 
 QuickType is a private, portable text expander for 64-bit Windows 11. It runs
 locally, stores its SQLite database beside the executable, and does not require
@@ -8,9 +9,12 @@ Python on the target computer.
 
 ## Application preview
 
-![QuickType running on Windows 11](docs/quicktype-screenshot.png)
+![QuickType 3.0 visual rich-text editor running on Windows 11](docs/quicktype-screenshot.png)
 
-QuickType 3.0 adds rich snippets with a Visual/HTML editor, embedded images,
+The screenshot shows the 3.0 Visual editor with formatting controls, an
+embedded image, Smart Elements, and the generated rich-content preview.
+
+QuickType 3.0.0 adds rich snippets with a Visual/HTML editor, embedded images,
 multi-format Windows paste, and visual Smart Elements while remaining fully
 local. Existing and newly created snippets stay Plain Text unless explicitly
 converted.
