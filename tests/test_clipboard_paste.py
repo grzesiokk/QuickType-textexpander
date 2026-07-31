@@ -3,7 +3,11 @@ from types import SimpleNamespace
 from PySide6.QtCore import QMimeData
 
 from quicktype import clipboard_paste
-from quicktype.clipboard_paste import RTF_MIME, RichClipboardCoordinator
+from quicktype.clipboard_paste import (
+    CF_HTML_MIME,
+    RTF_MIME,
+    RichClipboardCoordinator,
+)
 from quicktype.models import RenderedContent
 
 
@@ -17,8 +21,22 @@ def test_rendered_mime_offers_rtf_html_and_plain_fallback() -> None:
     )
 
     assert mime.text() == "Hello"
-    assert mime.html() == "<p><b>Hello</b></p>"
     assert bytes(mime.data(RTF_MIME).data()).startswith(b"{\\rtf1")
+    cf_html = bytes(mime.data(CF_HTML_MIME).data())
+    assert b"<html><body><!--StartFragment-->" in cf_html
+    assert b"<!--EndFragment--></body></html>" in cf_html
+    header, body = cf_html.split(b"\r\n\r\n", 1)
+    offsets = {
+        key: int(value)
+        for line in header.decode("ascii").splitlines()[1:]
+        for key, value in (line.split(":", 1),)
+    }
+    assert cf_html[offsets["StartHTML"] :] == body
+    assert (
+        cf_html[offsets["StartFragment"] : offsets["EndFragment"]]
+        == b"<p><b>Hello</b></p>"
+    )
+    assert offsets["EndHTML"] == len(cf_html)
 
 
 class _FakeClipboard:

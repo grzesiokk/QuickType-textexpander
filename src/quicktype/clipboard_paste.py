@@ -10,6 +10,7 @@ from PySide6.QtGui import QClipboard, QImage
 from .models import RenderedContent
 
 RTF_MIME = 'application/x-qt-windows-mime;value="Rich Text Format"'
+CF_HTML_MIME = 'application/x-qt-windows-mime;value="HTML Format"'
 RESTORE_DELAY_MS = 750
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -126,6 +127,37 @@ class RichClipboardCoordinator:
         if rendered.rtf:
             mime.setData(RTF_MIME, QByteArray(rendered.rtf + b"\0"))
         if rendered.html:
-            mime.setHtml(rendered.html)
+            mime.setData(CF_HTML_MIME, QByteArray(_cf_html(rendered.html)))
         mime.setText(rendered.plain_text)
         return mime
+
+
+def _cf_html(fragment: str) -> bytes:
+    prefix = b"<html><body><!--StartFragment-->"
+    suffix = b"<!--EndFragment--></body></html>"
+    body = prefix + fragment.encode("utf-8") + suffix
+    header_template = (
+        "Version:1.0\r\n"
+        "StartHTML:{start_html:010d}\r\n"
+        "EndHTML:{end_html:010d}\r\n"
+        "StartFragment:{start_fragment:010d}\r\n"
+        "EndFragment:{end_fragment:010d}\r\n"
+        "\r\n"
+    )
+    placeholder = header_template.format(
+        start_html=0,
+        end_html=0,
+        start_fragment=0,
+        end_fragment=0,
+    ).encode("ascii")
+    start_html = len(placeholder)
+    start_fragment = start_html + len(prefix)
+    end_fragment = start_fragment + len(fragment.encode("utf-8"))
+    end_html = start_html + len(body)
+    header = header_template.format(
+        start_html=start_html,
+        end_html=end_html,
+        start_fragment=start_fragment,
+        end_fragment=end_fragment,
+    ).encode("ascii")
+    return header + body
