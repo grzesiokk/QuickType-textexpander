@@ -26,14 +26,19 @@ class SingleInstance(QObject):
         socket.disconnectFromServer()
         return True
 
-    def listen(self) -> None:
+    def listen(self) -> bool:
         server = QLocalServer(self)
         if not server.listen(SINGLE_INSTANCE_NAME):
+            # Another instance may have claimed the endpoint after our initial
+            # startup probe. Never remove a live server in that race.
+            if self.notify_existing():
+                return False
             QLocalServer.removeServer(SINGLE_INSTANCE_NAME)
             if not server.listen(SINGLE_INSTANCE_NAME):
                 raise RuntimeError(server.errorString())
         server.newConnection.connect(self._handle_connection)
         self._server = server
+        return True
 
     def _handle_connection(self) -> None:
         if self._server is None:

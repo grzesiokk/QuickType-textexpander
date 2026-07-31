@@ -52,7 +52,13 @@ from .windows_platform import (
 
 
 class QuickTypeController:
-    def __init__(self, application: QApplication, *, start_minimized: bool) -> None:
+    def __init__(
+        self,
+        application: QApplication,
+        *,
+        start_minimized: bool,
+        single_instance: SingleInstance | None = None,
+    ) -> None:
         self.application = application
         self.storage = Storage(database_path())
         self.storage.initialize()
@@ -136,8 +142,11 @@ class QuickTypeController:
             on_quit=self.quit,
             autostart=autostart,
         )
-        self.instance = SingleInstance(self.window.show_and_activate)
-        self.instance.listen()
+        self.instance = single_instance or SingleInstance(
+            self.window.show_and_activate
+        )
+        if single_instance is None and not self.instance.listen():
+            raise RuntimeError("Another QuickType instance is already running.")
 
         self.window.language_change_requested.connect(self.set_language)
         self.window.active_change_requested.connect(self.set_active)
@@ -537,6 +546,12 @@ def run(argv: list[str] | None = None) -> int:
 
     if SingleInstance.notify_existing():
         return 0
+    activation_target: list[Callable[[], None]] = []
+    single_instance = SingleInstance(
+        lambda: activation_target[0]() if activation_target else None
+    )
+    if not single_instance.listen():
+        return 0
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, APP_NAME, "Windows system tray is unavailable.")
         return 1
@@ -550,7 +565,12 @@ def run(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        controller = QuickTypeController(application, start_minimized=options.minimized)
+        controller = QuickTypeController(
+            application,
+            start_minimized=options.minimized,
+            single_instance=single_instance,
+        )
+        activation_target.append(controller.window.show_and_activate)
     except Exception as error:
         translator = Translator("pl" if QLocale.system().language() == QLocale.Language.Polish else "en")
         QMessageBox.critical(
