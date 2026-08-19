@@ -3,6 +3,7 @@ import pytest
 from quicktype.models import (
     Snippet,
     TriggerMode,
+    next_copy_abbreviation,
     normalize_applications,
     snippet_applies_to_process,
     validate_abbreviation,
@@ -50,3 +51,13 @@ def test_snippet_application_scope_is_case_insensitive() -> None:
     assert snippet_applies_to_process(global_snippet, "notepad.exe")
     assert snippet_applies_to_process(scoped, "CODE.EXE")
     assert not snippet_applies_to_process(scoped, "notepad.exe")
+
+
+def test_copy_abbreviation_uses_next_available_suffix() -> None:
+    assert next_copy_abbreviation("sig", {"sig", "sig_copy", "sig_copy2"}) == "sig_copy3"
+
+
+def test_copy_abbreviation_is_limited_to_64_characters() -> None:
+    result = next_copy_abbreviation("x" * 64, {"x" * 64})
+    assert result == ("x" * 59) + "_copy"
+    assert len(result) == 64
