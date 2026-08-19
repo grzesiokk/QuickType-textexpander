@@ -59,6 +59,8 @@ jobs:
           src/quicktype/clipboard_history.py
           src/quicktype/i18n.py
           src/quicktype/app.py
+          src/quicktype/hook.py
+          src/quicktype/windows_platform.py
 
       - name: Run tests with coverage
         run: >-
