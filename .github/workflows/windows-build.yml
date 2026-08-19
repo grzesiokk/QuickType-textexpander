@@ -61,6 +61,7 @@ jobs:
           src/quicktype/app.py
           src/quicktype/hook.py
           src/quicktype/windows_platform.py
+          src/quicktype/ui.py
 
       - name: Run tests with coverage
         run: >-
