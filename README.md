@@ -313,7 +313,7 @@ Run all local quality gates:
 
 ```powershell
 .\.venv\Scripts\ruff.exe check src tests scripts
-.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/rich_content.py src/quicktype/clipboard_paste.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py
+.\.venv\Scripts\mypy.exe src/quicktype/models.py src/quicktype/storage.py src/quicktype/backup.py src/quicktype/backup_catalog.py src/quicktype/auto_backup.py src/quicktype/matcher.py src/quicktype/template_engine.py src/quicktype/rich_content.py src/quicktype/clipboard_paste.py src/quicktype/builtin_libraries.py src/quicktype/search.py src/quicktype/diagnostics.py src/quicktype/importing.py src/quicktype/recovery.py src/quicktype/maintenance.py src/quicktype/constants.py src/quicktype/single_instance.py src/quicktype/hotkeys.py src/quicktype/clipboard_history.py src/quicktype/i18n.py
 .\.venv\Scripts\python.exe -m pytest --cov=quicktype --cov-fail-under=72
 .\.venv\Scripts\pip-audit.exe --local --skip-editable
 ```
