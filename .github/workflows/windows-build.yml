@@ -47,6 +47,8 @@ jobs:
           src/quicktype/auto_backup.py
           src/quicktype/matcher.py
           src/quicktype/template_engine.py
+          src/quicktype/rich_content.py
+          src/quicktype/clipboard_paste.py
           src/quicktype/builtin_libraries.py
           src/quicktype/search.py
           src/quicktype/diagnostics.py
