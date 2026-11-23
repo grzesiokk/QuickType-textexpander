@@ -21,7 +21,7 @@ converted.
 
 ## How it was built
 
-QuickType was designed and developed by me with AI coding agents
+QuickType was designed and developed by me with AI coding agent
 (OpenAI Codex) as pair programmers: I defined the
 architecture, requirements and test scenarios, reviewed every change,
 and handled packaging, CI and releases.
