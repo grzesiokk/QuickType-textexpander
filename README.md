@@ -342,5 +342,12 @@ virtual environment without reinstalling dependencies.
 QuickType has no network integration, telemetry, synchronization, or cloud
 storage. Snippets and settings remain in the local SQLite database.
 
+## How it was built
+
+QuickType was designed and developed by me with AI coding agents
+(e.g. OpenAI Codex, GitHub Copilot) as pair programmers: I defined the
+architecture, requirements and test scenarios, reviewed every change,
+and handled packaging, CI and releases.
+
 The project is licensed under the MIT License. PySide6/Qt and other packaged
 dependencies retain their respective upstream licenses.
