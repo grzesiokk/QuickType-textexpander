@@ -19,6 +19,13 @@ multi-format Windows paste, and visual Smart Elements while remaining fully
 local. Existing and newly created snippets stay Plain Text unless explicitly
 converted.
 
+## How it was built
+
+QuickType was designed and developed by me with AI coding agents
+(OpenAI Codex) as pair programmers: I defined the
+architecture, requirements and test scenarios, reviewed every change,
+and handled packaging, CI and releases.
+
 ## Ready-to-use application
 
 **[Download the latest QuickType.exe](https://github.com/grzesiokk/QuickType-textexpander/releases/latest/download/QuickType.exe)**
@@ -342,12 +349,6 @@ virtual environment without reinstalling dependencies.
 QuickType has no network integration, telemetry, synchronization, or cloud
 storage. Snippets and settings remain in the local SQLite database.
 
-## How it was built
-
-QuickType was designed and developed by me with AI coding agents
-(e.g. OpenAI Codex, GitHub Copilot) as pair programmers: I defined the
-architecture, requirements and test scenarios, reviewed every change,
-and handled packaging, CI and releases.
 
 The project is licensed under the MIT License. PySide6/Qt and other packaged
 dependencies retain their respective upstream licenses.
