@@ -53,6 +53,15 @@ jobs:
           src/quicktype/importing.py
           src/quicktype/recovery.py
           src/quicktype/maintenance.py
+          src/quicktype/constants.py
+          src/quicktype/single_instance.py
+          src/quicktype/hotkeys.py
+          src/quicktype/clipboard_history.py
+          src/quicktype/i18n.py
+          src/quicktype/app.py
+          src/quicktype/hook.py
+          src/quicktype/windows_platform.py
+          src/quicktype/ui.py
 
       - name: Run tests with coverage
         run: >-

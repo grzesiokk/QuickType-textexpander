@@ -12,8 +12,11 @@ import regex
 from PySide6.QtCore import (
     QAbstractTableModel,
     QByteArray,
+    QMimeData,
     QModelIndex,
     QObject,
+    QPersistentModelIndex,
+    QPoint,
     QSignalBlocker,
     Qt,
     QUrl,
@@ -80,6 +83,7 @@ from PySide6.QtWidgets import (
 
 from .backup import BackupFormatError, export_backup
 from .backup_catalog import (
+    BackupEntry,
     BackupKind,
     delete_backup_file,
     list_backup_entries,
@@ -284,7 +288,7 @@ class RichTextEdit(QTextEdit):
         if token is not None:
             self.smart_element_activated.emit(*token)
 
-    def insertFromMimeData(self, source: object) -> None:
+    def insertFromMimeData(self, source: QMimeData) -> None:
         if hasattr(source, "hasImage") and source.hasImage():
             image = source.imageData()
             if isinstance(image, QImage) and not image.isNull():
@@ -300,7 +304,7 @@ class RichTextEdit(QTextEdit):
                             Path(url.toLocalFile()).name,
                         )
                         return
-        super().insertFromMimeData(source)  # type: ignore[arg-type]
+        super().insertFromMimeData(source)
 
 
 class EngineSignals(QObject):
@@ -789,15 +793,19 @@ class QuickAccessModel(QAbstractTableModel):
         self.entries = entries
         self.endResetModel()
 
-    def rowCount(self, parent: QModelIndex | None = None) -> int:
+    def rowCount(
+        self, parent: QModelIndex | QPersistentModelIndex | None = None
+    ) -> int:
         return 0 if parent is not None and parent.isValid() else len(self.entries)
 
-    def columnCount(self, parent: QModelIndex | None = None) -> int:
+    def columnCount(
+        self, parent: QModelIndex | QPersistentModelIndex | None = None
+    ) -> int:
         return 0 if parent is not None and parent.isValid() else 4
 
     def data(
         self,
-        index: QModelIndex,
+        index: QModelIndex | QPersistentModelIndex,
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> object:
         if not index.isValid() or not 0 <= index.row() < len(self.entries):
@@ -1228,7 +1236,7 @@ class BackupRestoreDialog(QDialog):
         self.t = translator
         self.storage = storage
         self.backup_directory = storage.path.parent / "Backups"
-        self.entries = []
+        self.entries: list[BackupEntry] = []
         self._analysis_cache: dict[Path, RestoreAnalysis] = {}
         self._selected_analysis: RestoreAnalysis | None = None
         self.setModal(True)
@@ -1256,10 +1264,10 @@ class BackupRestoreDialog(QDialog):
         filters.addWidget(QLabel(self.t("restore_change_filter")))
         self.change_filter = QComboBox()
         self.change_filter.addItem(self.t("restore_change_all"), None)
-        for kind in RestoreChangeKind:
+        for change_kind in RestoreChangeKind:
             self.change_filter.addItem(
-                self.t(f"restore_change_{kind.value}"),
-                kind.value,
+                self.t(f"restore_change_{change_kind.value}"),
+                change_kind.value,
             )
         self.change_filter.currentIndexChanged.connect(
             self.apply_change_filter
@@ -1388,7 +1396,9 @@ class BackupRestoreDialog(QDialog):
         row = self.table.currentRow()
         if row < 0 or self.table.isRowHidden(row):
             return None
-        value = self.table.item(row, 0).data(ID_ROLE)
+        item = self.table.item(row, 0)
+        assert item is not None
+        value = item.data(ID_ROLE)
         return Path(str(value)) if value else None
 
     @property
@@ -1401,12 +1411,14 @@ class BackupRestoreDialog(QDialog):
         first_visible: int | None = None
         preferred_row: int | None = None
         for row in range(self.table.rowCount()):
-            kind = self.table.item(row, 0).data(BACKUP_KIND_ROLE)
+            item = self.table.item(row, 0)
+            assert item is not None
+            kind = item.data(BACKUP_KIND_ROLE)
             visible = selected_kind is None or kind == selected_kind
             self.table.setRowHidden(row, not visible)
             if visible and first_visible is None:
                 first_visible = row
-            row_path = Path(str(self.table.item(row, 0).data(ID_ROLE)))
+            row_path = Path(str(item.data(ID_ROLE)))
             if visible and row_path == preferred_path:
                 preferred_row = row
         with QSignalBlocker(self.table):
@@ -2586,8 +2598,9 @@ class MainWindow(QMainWindow):
         self.category_combo = QComboBox()
         self.category_combo.setEditable(True)
         self.category_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        if self.category_combo.lineEdit() is not None:
-            self.category_combo.lineEdit().setMaxLength(64)
+        category_line_edit = self.category_combo.lineEdit()
+        if category_line_edit is not None:
+            category_line_edit.setMaxLength(64)
         self.category_combo.currentTextChanged.connect(self._editor_changed)
         form.addWidget(self.category_label, 1, 0)
         form.addWidget(self.category_combo, 1, 1)
@@ -2794,7 +2807,7 @@ class MainWindow(QMainWindow):
         self.font_size_spin.setValue(11)
         self.font_size_spin.valueChanged.connect(self._set_font_size)
         row.addWidget(self.font_size_spin)
-        for label, callback in (
+        for label, action in (
             ("A", self._choose_text_color),
             ("▨", self._choose_background_color),
             ("←", lambda: self._set_alignment(Qt.AlignmentFlag.AlignLeft)),
@@ -2807,7 +2820,7 @@ class MainWindow(QMainWindow):
             ("⚙", self.edit_current_image),
         ):
             button = QPushButton(label)
-            button.clicked.connect(callback)
+            button.clicked.connect(action)
             row.addWidget(button)
         row.addStretch(1)
         return bar
@@ -3243,6 +3256,7 @@ class MainWindow(QMainWindow):
         visible_count = 0
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 2)
+            assert item is not None
             snippet_id = item.data(ID_ROLE)
             snippet = next((entry for entry in self.snippets if entry.id == snippet_id), None)
             matches_text = not needle or (
@@ -3862,7 +3876,12 @@ class MainWindow(QMainWindow):
         if source is None:
             return
         value = not bool(getattr(source, field))
-        saved = self.storage.save_snippet(replace(source, **{field: value}))
+        updated = (
+            replace(source, enabled=value)
+            if field == "enabled"
+            else replace(source, favorite=value)
+        )
+        saved = self.storage.save_snippet(updated)
         self.reload_snippets(select_id=saved.id)
         self.snippets_changed.emit()
         self.status_message.setText(
@@ -3884,7 +3903,7 @@ class MainWindow(QMainWindow):
         else:
             self.toggle_current_enabled()
 
-    def _show_table_context_menu(self, position: object) -> None:
+    def _show_table_context_menu(self, position: QPoint) -> None:
         item = self.table.itemAt(position)
         if item is None:
             return
@@ -4798,7 +4817,9 @@ class MainWindow(QMainWindow):
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
             if item and item.data(ID_ROLE) == snippet.id:
-                self.table.item(row, 5).setText(str(snippet.usage_count))
+                usage_item = self.table.item(row, 5)
+                assert usage_item is not None
+                usage_item.setText(str(snippet.usage_count))
                 break
         if self._current_id == snippet.id:
             self._update_stats_label(snippet)
@@ -4831,7 +4852,7 @@ class MainWindow(QMainWindow):
         for key, value in values.items():
             self.storage.set_setting(
                 key,
-                bytes(value.toBase64()).decode("ascii"),
+                bytes(value.toBase64().data()).decode("ascii"),
             )
 
     def _restore_ui_state(self) -> None:
